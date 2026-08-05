@@ -20,16 +20,15 @@ extern "C" {
 #include "imu.h"            /* 顺带带入驱动 API(Imu_GetYaw 等)与算法调参宏 */
 
 /* ==========================================================================
- *  ★ IMU 传感器串口 —— 485 口，723 上为 USART3 (PD8=TX, PD9=RX)
+ *  ★ IMU 传感器串口 —— 485 口，723 上用 USART1 (PB14=TX, PB15=RX，DMA RX 已配)
  * --------------------------------------------------------------------------
- *  F405 工程用 USART6；723 没有，按你的硬件接在 PD8/PD9 = USART3。
- *  ★ 需你在 CubeMX 里【把 USART3 开起来 + PD8/PD9 复用 + 配 DMA RX(空闲中断)】，
- *    并把 PD10/PD11 配为推挽输出(RS485 方向控制)。这些属于基础配置，由你决定、
- *    在 CubeMX 里改 usart.c/gpio.c，本工程不擅自修改基础文件、也不搬 F4 的配置过来。
- *  huart3 由 CubeMX 生成的 usart.c 提供；未生成前 imu_main.c 里有 extern 前向声明可先编译。
+ *  USART1 已在 usart.c/HAL_UART_MspInit 中配好(PB14/PB15, AF4, DMA1_Stream2 RX
+ *  circular)，故改这里的宏即可切换 IMU 串口，不必动 usart.c。
+ *  RS485 方向由硬件自动控制，无方向引脚。
+ *  如换其它串口：把下面宏改成对应 huartX，并确保该串口在 usart.c 里已初始化。
  * ========================================================================== */
 #ifndef IMU_UART_HANDLE
-#define IMU_UART_HANDLE   huart3
+#define IMU_UART_HANDLE   huart1
 #endif
 
 /**

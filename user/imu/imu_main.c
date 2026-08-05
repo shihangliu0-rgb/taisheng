@@ -9,17 +9,13 @@
 
 #include "imu_main.h"
 #include "imu_fusion.h"
-#include "usart.h"          /* 引用 H7 既有串口句柄声明，仅使用、不修改 usart.c */
+#include "usart.h"          /* huart1/huart4 等 H7 串口句柄声明在此，仅使用、不修改 usart.c */
 
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* USART3(PD8/PD9) 由用户在 CubeMX 开启后，huart3 的定义在 usart.c 中生成。
- * 在那之前用 extern 前向声明保证可编译；与 usart.h 的声明兼容(可重复 extern)。 */
-extern UART_HandleTypeDef huart3;
 
 /* ==========================================================================
  *  航向保持(Yaw Hold) PID 子系统 —— 移植自 b-team 旧 imu_main

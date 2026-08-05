@@ -229,7 +229,7 @@ __weak void StartCommTask(void *argument)
 {
   /* USER CODE BEGIN StartCommTask */
   (void)argument;
-  (void)Upper_Init(&huart4);
+  (void)Upper_Init(&UPPER_UART_HANDLE);
 
   /* Infinite loop */
   for(;;)

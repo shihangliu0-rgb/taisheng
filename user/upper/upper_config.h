@@ -18,6 +18,13 @@
 
 /* #define UPPER_DEBUG */
 
+/* ★ 上位机通信串口 —— 723 上为 UART4 (PA0=TX, PA1=RX，已在 usart.c 的
+ *   HAL_UART_MspInit 中配好 PA0/PA1, AF8)。改这里即可切换上位机串口，
+ *   不必动 freertos.c / usart.c。当前接线与你要求一致(PA0/PA1)。 */
+#ifndef UPPER_UART_HANDLE
+#define UPPER_UART_HANDLE   huart4
+#endif
+
 #ifdef UPPER_DEBUG
 
 /* 通信看门狗：超过该时间(ms)未收到任何上位机帧 -> 制动/失能，
