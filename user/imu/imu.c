@@ -162,7 +162,11 @@ static void Imu_SendCommand(const uint8_t *cmd, uint16_t len)
         return;
     }
 
+    /* RS485 手动方向控制(723)：PD10/PD11 同高=发送 */
+    HAL_GPIO_WritePin(IMU_RS485_DE_PORT, IMU_RS485_DE_PIN, GPIO_PIN_SET);
     HAL_UART_Transmit(imu_uart, (uint8_t *)cmd, len, 50U);
+    /* 阻塞发送已返回，恢复接收方向：PD10/PD11 同低 */
+    HAL_GPIO_WritePin(IMU_RS485_DE_PORT, IMU_RS485_DE_PIN, GPIO_PIN_RESET);
 }
 
 /**

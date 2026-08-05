@@ -20,16 +20,16 @@ extern "C" {
 #include "imu.h"            /* 顺带带入驱动 API(Imu_GetYaw 等)与算法调参宏 */
 
 /* ==========================================================================
- *  ★ IMU 传感器串口选择（由你决定）
+ *  ★ IMU 传感器串口 —— 485 口，723 上为 USART3 (PD8=TX, PD9=RX)
  * --------------------------------------------------------------------------
- *  F405 上 IMU 接在 USART6；723 没有 USART6，请按你的硬件接线选一个已开启的串口，
- *  并在 CubeMX / usart.c 里确认【该串口已使能 + 配了 DMA RX】(用于空闲中断接收)。
- *  现有候选(723)：huart1 / huart2(均已配 DMA RX)；huart4 已被上位机占用。
- *  —— 禁止为执行而擅自把 F405 的 usart 搬进 usart.c；开哪个口由你拍板。
+ *  F405 工程用 USART6；723 没有，按你的硬件接在 PD8/PD9 = USART3。
+ *  ★ 需你在 CubeMX 里【把 USART3 开起来 + PD8/PD9 复用 + 配 DMA RX(空闲中断)】，
+ *    并把 PD10/PD11 配为推挽输出(RS485 方向控制)。这些属于基础配置，由你决定、
+ *    在 CubeMX 里改 usart.c/gpio.c，本工程不擅自修改基础文件、也不搬 F4 的配置过来。
+ *  huart3 由 CubeMX 生成的 usart.c 提供；未生成前 imu_main.c 里有 extern 前向声明可先编译。
  * ========================================================================== */
 #ifndef IMU_UART_HANDLE
-#warning "IMU_UART_HANDLE 未指定，默认使用 huart2；请按硬件接线在 imu_main.h 修改，并确认已在 CubeMX 开启该串口及 DMA RX"
-#define IMU_UART_HANDLE   huart2
+#define IMU_UART_HANDLE   huart3
 #endif
 
 /**

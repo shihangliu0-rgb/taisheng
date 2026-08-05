@@ -6,7 +6,11 @@
  */
 
 #include "imu_main.h"
-#include "usart.h"          /* 引用 H7 既有串口句柄声明(huart1/2/4)，仅使用、不修改 usart.c */
+#include "usart.h"          /* 引用 H7 既有串口句柄声明，仅使用、不修改 usart.c */
+
+/* USART3(PD8/PD9) 由用户在 CubeMX 开启后，huart3 的定义在 usart.c 中生成。
+ * 在那之前用 extern 前向声明保证可编译；与 usart.h 的声明兼容(可重复 extern)。 */
+extern UART_HandleTypeDef huart3;
 
 HAL_StatusTypeDef ImuMain_Init(void)
 {
