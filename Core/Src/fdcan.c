@@ -22,7 +22,7 @@
 
 /* USER CODE BEGIN 0 */
 
-/* user/up 已移除：fdcan_task.h 不再需要 */
+#include "fdcan_task.h"
 
 /* USER CODE END 0 */
 
