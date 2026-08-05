@@ -44,6 +44,15 @@ HAL_StatusTypeDef ImuMain_Init(void);
 void ImuMain_Run1ms(void);
 
 /**
+ * @brief  航向保持(Yaw Hold)：根据当前偏航角计算底盘旋转输出
+ * @param  vx    X 方向速度指令(用于判静止)
+ * @param  vy    Y 方向速度指令(用于判静止)
+ * @param  omega 手动旋转指令
+ * @retval 修正后的底盘旋转指令；IMU 未就绪时直通 omega
+ */
+int16_t ImuMain_CalcOmega(int16_t vx, int16_t vy, int16_t omega);
+
+/**
  * @brief  串口 DMA 空闲接收完成回调（放到 HAL_UARTEx_RxEventCallback）
  * @param  huart 触发回调的串口句柄
  * @param  size  本次接收字节数
