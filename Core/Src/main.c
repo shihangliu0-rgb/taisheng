@@ -27,8 +27,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "computer_link.h"
 #include "imu_main.h"
+#include "upper_protocol.h"
 
 /* USER CODE END Includes */
 
@@ -227,7 +227,7 @@ void PeriphCommonClock_Config(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  ComputerLink_RxCplt(huart);
+  Upper_RxCplt(huart);
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
@@ -237,7 +237,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  ComputerLink_Error(huart);
+  Upper_Error(huart);
   ImuMain_HandleUartError(huart);
 }
 

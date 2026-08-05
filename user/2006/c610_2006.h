@@ -1,7 +1,7 @@
 #ifndef C610_2006_H
 #define C610_2006_H
 
-#include "dm_2006_bus.h"
+/* user/up 已移除：dm_2006_bus.h 不再需要 */
 
 #include <stdbool.h>
 #include <stdint.h>

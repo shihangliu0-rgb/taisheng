@@ -27,9 +27,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "chassis_main.h"
-#include "computer_link.h"
 #include "imu_main.h"
-#include "up_main.h"
+#include "upper_protocol.h"
 #include "usart.h"
 
 /* USER CODE END Includes */
@@ -198,20 +197,14 @@ __weak void StartChassisTask(void *argument)
 __weak void StartLiftTask(void *argument)
 {
   /* USER CODE BEGIN StartLiftTask */
+  /* user/up(抬升/上位机构控制)模块已移除，本任务暂为空；按需在此接入新逻辑 */
   uint32_t next_tick = osKernelGetTickCount();
-  HAL_StatusTypeDef up_result;
 
   (void)argument;
-  up_result = Up_Init();
 
   /* Infinite loop */
   for(;;)
   {
-    if (up_result == HAL_OK)
-    {
-      Up_Run1ms();
-    }
-
     next_tick += 1U;
     (void)osDelayUntil(next_tick);
   }
@@ -229,12 +222,12 @@ __weak void StartCommTask(void *argument)
 {
   /* USER CODE BEGIN StartCommTask */
   (void)argument;
-  (void)ComputerLink_Init(&huart4);
+  (void)Upper_Init(&huart4);
 
   /* Infinite loop */
   for(;;)
   {
-    ComputerLink_Run();
+    Upper_Run();
     osDelay(1);
   }
   /* USER CODE END StartCommTask */
