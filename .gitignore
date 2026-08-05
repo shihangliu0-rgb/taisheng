@@ -1,0 +1,22 @@
+# Keil MDK 产生的中间文件
+*.uvguix.*
+*.uvoptx
+*.bak
+*.dep
+*.lst
+*.obj
+*.o
+*.crf
+*.lnp
+*.axf
+*.htm
+*.build_log.htm
+*.sct
+*.map
+*.txt
+
+# 目录
+DebugConfig/
+Listings/
+Objects/
+RTE/
