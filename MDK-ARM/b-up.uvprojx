@@ -1523,6 +1523,16 @@
               <FileType>5</FileType>
               <FilePath>../user/imu/imu_main.h</FilePath>
             </File>
+            <File>
+              <FileName>imu_fusion.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/imu/imu_fusion.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu_fusion.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/imu/imu_fusion.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

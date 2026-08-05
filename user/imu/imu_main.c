@@ -8,6 +8,7 @@
  */
 
 #include "imu_main.h"
+#include "imu_fusion.h"
 #include "usart.h"          /* 引用 H7 既有串口句柄声明，仅使用、不修改 usart.c */
 
 #include <math.h>
@@ -174,12 +175,14 @@ HAL_StatusTypeDef ImuMain_Init(void)
     Imu_AttachUart(&IMU_UART_HANDLE);   /* 绑定 IMU 串口(由 imu_main.h 的宏选择，不修改 usart.c) */
     Imu_Init();                         /* 算法初始化 + 启动 DMA 接收 + 零漂校准调度 */
     reset_yaw_control();
+    ImuFusion_Reset();                  /* 编码器-IMU 融合器复位 */
     return HAL_OK;
 }
 
 void ImuMain_Run1ms(void)
 {
     Imu_Update();                       /* 驱动调度器：IMU 指令序列 / 延时回调 */
+    ImuFusion_Update(HAL_GetTick());    /* 编码器(VESC)与 IMU 速度融合 + 延迟自适应权重 */
 }
 
 int16_t ImuMain_CalcOmega(int16_t vx, int16_t vy, int16_t omega)
