@@ -24,6 +24,26 @@
 #include <stdint.h>
 #include <string.h>
 
+/* ============================ 模块状态(前置定义，供下方所有函数使用) ============================ */
+static UART_HandleTypeDef *upper_uart;
+static uint8_t  rx_byte;
+static volatile uint8_t  restart_requested;
+static volatile uint32_t last_rx_ms;
+static volatile bool     link_online;
+
+/* 周期遥测 / 数据流状态 */
+static volatile uint8_t  telem_on;
+static volatile uint16_t telem_period;
+static uint32_t          last_telem_ms;
+
+static volatile uint8_t  stream_on;
+static volatile uint16_t stream_period;
+static uint8_t           sub_channels[UPPER_MAX_SUB_CH];
+static volatile uint8_t  sub_count;
+static uint32_t          last_stream_ms;
+
+static volatile uint8_t  cur_mode;
+
 /* ============================ CRC16/MODBUS ============================ */
 static uint16_t upper_crc16(const uint8_t *d, uint16_t len)
 {
@@ -237,26 +257,6 @@ static void rx_feed(uint8_t b)
         break;
     }
 }
-
-/* ============================ 模块状态 ============================ */
-static UART_HandleTypeDef *upper_uart;
-static uint8_t  rx_byte;
-static volatile uint8_t  restart_requested;
-static volatile uint32_t last_rx_ms;
-static volatile bool     link_online;
-
-/* 周期遥测 / 数据流状态 */
-static volatile uint8_t  telem_on;
-static volatile uint16_t telem_period;
-static uint32_t          last_telem_ms;
-
-static volatile uint8_t  stream_on;
-static volatile uint16_t stream_period;
-static uint8_t           sub_channels[UPPER_MAX_SUB_CH];
-static volatile uint8_t  sub_count;
-static uint32_t          last_stream_ms;
-
-static volatile uint8_t  cur_mode;
 
 static HAL_StatusTypeDef upper_start_rx(void)
 {

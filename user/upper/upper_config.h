@@ -25,8 +25,6 @@
 #define UPPER_UART_HANDLE   huart4
 #endif
 
-#ifdef UPPER_DEBUG
-
 /* 通信看门狗：超过该时间(ms)未收到任何上位机帧 -> 制动/失能，
  * 对应协议中 HEARTBEAT(0x01) 的链路保活要求。 */
 #ifndef UPPER_WATCHDOG_MS
@@ -59,5 +57,4 @@
 #define UPPER_MAX_SUB_CH         32U
 #endif
 
-#endif /* UPPER_DEBUG */
 #endif /* UPPER_CONFIG_H */
