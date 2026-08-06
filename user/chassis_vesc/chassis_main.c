@@ -262,3 +262,19 @@ Chassis_State_t Chassis_GetState(void)
 {
     return chassis_state;
 }
+
+void Chassis_Stop(void)
+{
+    /* 普通停止：速度目标清零，保持当前状态(如路径规划暂停，之后可恢复) */
+    chassis_target_vx = 0;
+    chassis_target_vy = 0;
+    chassis_target_z = 0;
+}
+
+void Chassis_EmergencyStop(void)
+{
+    /* 安全/急停：立即停转所有电机 + 切到 CHASSIS_STOP(需显式切回才能恢复) */
+    Chassis_StopAll();            /* 立即停转：target=0 + SetRpm(0) + send */
+    chassis_state = CHASSIS_STOP;
+    /* PID_Reset();  底盘当前为 速度->RPM 开环、无独立 PID；将来若加入 PID 在此复位 */
+}

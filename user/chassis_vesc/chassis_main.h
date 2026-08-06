@@ -59,4 +59,10 @@ void Chassis_SetState(Chassis_State_t state);
 /* 获取当前底盘状态 */
 Chassis_State_t Chassis_GetState(void);
 
+/* 普通停止：速度目标清零，【保持当前状态】(如路径规划暂停后可恢复) */
+void Chassis_Stop(void);
+/* 安全/急停：立即停转所有电机 + 切到 CHASSIS_STOP(需显式切回才能恢复)。
+ * 触发场景：急停、CAN/电机掉线、看门狗超时等 */
+void Chassis_EmergencyStop(void);
+
 #endif
