@@ -29,6 +29,7 @@
 /* USER CODE BEGIN Includes */
 #include "imu_main.h"
 #include "upper_protocol.h"
+#include "uart_selftest.h"
 
 /* USER CODE END Includes */
 
@@ -115,7 +116,11 @@ int main(void)
   MX_USART2_UART_Init();
   MX_UART4_Init();
   /* USER CODE BEGIN 2 */
-
+#ifdef UART_SELFTEST
+  /* 串口自测：阻塞循环向 USART1/2、UART4 发送，不启动 FreeRTOS，与原功能隔离。
+   * 开关在 Core/Inc/uart_selftest.h 的 UART_SELFTEST 宏。 */
+  UartSelftest_Run();
+#endif
   /* USER CODE END 2 */
 
   /* Init scheduler */
