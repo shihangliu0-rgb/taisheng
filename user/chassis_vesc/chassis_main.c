@@ -57,6 +57,7 @@ static vesc_can_t vesc_bus;
 static vesc_motor_t motors[ARRAY_SIZE(motor_config)];
 static uint32_t last_command_ms;
 static bool chassis_ready;
+static Chassis_State_t chassis_state = CHASSIS_INIT;
 
 volatile int16_t chassis_target_vx=0;
 volatile int16_t chassis_target_vy=0;
@@ -156,6 +157,7 @@ HAL_StatusTypeDef Chassis_Init(void)
     }
 
     chassis_ready = true;
+    chassis_state = CHASSIS_MOVE;   /* 初始化完成进入普通运动态(保持原有行为：速度指令直出) */
     last_command_ms = HAL_GetTick();
     send_targets();
     return HAL_OK;
@@ -188,10 +190,31 @@ void Chassis_Run1ms(void)
 
     now_ms = HAL_GetTick();
     process_feedback(now_ms);
-    vx = chassis_target_vx;
-    vy = chassis_target_vy;
-    z = ImuMain_CalcOmega(vx, vy, chassis_target_z);
-    (void)update_targets(vx, vy, z);
+
+    /* ====== 状态机：按当前状态决定电机输出 ====== */
+    switch (chassis_state)
+    {
+    case CHASSIS_MANUAL:   /* 手动遥控：速度指令直出(现有功能，与 MOVE 一致) */
+    case CHASSIS_MOVE:     /* 普通运动：速度指令直出(现有功能) */
+        vx = chassis_target_vx;
+        vy = chassis_target_vy;
+        z = ImuMain_CalcOmega(vx, vy, chassis_target_z);
+        (void)update_targets(vx, vy, z);
+        break;
+
+    case CHASSIS_INIT:     /* 初始化(正常不会在此运行)：安全停转 */
+    case CHASSIS_STOP:     /* 停止：所有电机输出 0 */
+    case CHASSIS_ERROR:    /* 故障：异常保护，停转 */
+    case CHASSIS_SUPPORT:  /* 支撑(未实现)：底盘锁止、输出 0 */
+    case CHASSIS_PATH_FOLLOW: /* 路径跟踪(未实现) */
+    case CHASSIS_ALIGN:       /* 对位对齐(未实现) */
+    case CHASSIS_OBSTACLE:    /* 避障(未实现) */
+    default:
+        /* 未实现的状态统一安全停转；待对应算法实现后在此替换各自逻辑 */
+        (void)update_targets(0, 0, 0);
+        break;
+    }
+
     if ((now_ms - last_command_ms) >= CHASSIS_COMMAND_PERIOD_MS)
     {
         last_command_ms = now_ms;
@@ -227,4 +250,15 @@ bool Chassis_GetStatus(chassis_wheel_t wheel,
     }
 
     return VescMotor_GetStatus(&motors[wheel], status);
+}
+
+/* ============================ 状态机 ============================ */
+void Chassis_SetState(Chassis_State_t state)
+{
+    chassis_state = state;
+}
+
+Chassis_State_t Chassis_GetState(void)
+{
+    return chassis_state;
 }
