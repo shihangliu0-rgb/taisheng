@@ -476,11 +476,6 @@
               <FilePath>../Core/Src/usart.c</FilePath>
             </File>
             <File>
-              <FileName>uart_selftest.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/uart_selftest.c</FilePath>
-            </File>
-            <File>
               <FileName>stm32h7xx_it.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32h7xx_it.c</FilePath>
