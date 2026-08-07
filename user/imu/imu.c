@@ -362,6 +362,7 @@ static void Imu_ProcessFrame(const uint8_t *frame, uint8_t len)
         /* 扣去静止零偏后，叠加上我们系统的角速度噪声自适应一阶低通去噪 */
         if (imu_gyro_bias_ready != 0U)
         {
+            /* 传感器左手系：陀螺取负统一到右手系(CCW+，与 yaw 取负一致) */
             gyro_clean = -(frame_data.value - imu_gyro_bias_deg_s);
         }
         else
@@ -380,8 +381,9 @@ static void Imu_ProcessFrame(const uint8_t *frame, uint8_t len)
             return;
         }
 
-        /* 原工程精髓：首帧相对起始方向归零处理 */
-        yaw_rel = Imu_CorrectYawDeg(frame_data.value);
+        /* 传感器为左手系：yaw 取负统一到右手系(CCW+，与陀螺取负一致)，
+         * 这样旋转矩阵 R(yaw)(右手系) 才正确，且 d(yaw)/dt 与 gyro_z 同号。 */
+        yaw_rel = Imu_CorrectYawDeg(-frame_data.value);
 
         /* 在官方官方解算角度的基础上，进行标量一阶卡尔曼去杂波平滑 */
         ImuAlgo_ApplyYawKalmanDeg(&imu_algo, yaw_rel);
