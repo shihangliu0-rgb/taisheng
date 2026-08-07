@@ -29,6 +29,7 @@
 #include "chassis_main.h"
 #include "imu_main.h"
 #include "upper_protocol.h"
+#include "dt35_link.h"
 #include "up_main.h"
 #include "usart.h"
 
@@ -230,11 +231,13 @@ __weak void StartCommTask(void *argument)
   /* USER CODE BEGIN StartCommTask */
   (void)argument;
   (void)Upper_Init(&UPPER_UART_HANDLE);
+  (void)DT35Link_Init(&DT35_UART_HANDLE);   /* DT35 双激光测距(地址 0x40/0x41) */
 
   /* Infinite loop */
   for(;;)
   {
     Upper_Run();
+    DT35Link_Run();                          /* 激光在线/超时维护 */
     osDelay(1);
   }
   /* USER CODE END StartCommTask */
