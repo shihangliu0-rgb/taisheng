@@ -1,0 +1,22 @@
+# Keil MDK 构建产物
+*.uvguix.*
+*.uvoptx
+*.bak
+*.dep
+*.lst
+*.o
+*.crf
+*.d
+*.axf
+*.htm
+*.build_log.htm
+*.sct
+*.map
+*.hex
+
+# 构建输出目录
+DebugConfig/
+Listings/
+Objects/
+RTE/
+DT35/
