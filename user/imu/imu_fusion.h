@@ -37,7 +37,7 @@ extern "C" {
 #define FUSION_GEAR_RATIO        1.0f     /* 电机->轮 减速比，直驱填 1.0 */
 #endif
 #ifndef FUSION_WHEEL_RADIUS_M
-#define FUSION_WHEEL_RADIUS_M    0.05f    /* 轮半径 m，★请按实车改 */
+#define FUSION_WHEEL_RADIUS_M    0.076f   /* 轮半径 m (轮径 152mm) */
 #endif
 
 /* ==========================================================================
