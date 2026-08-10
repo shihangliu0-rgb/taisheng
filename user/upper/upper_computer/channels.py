@@ -76,6 +76,7 @@ class ChannelSelector(QWidget):
             ("位移", [0x40, 0x41, 0x43]),
             ("实际速度", [0x44, 0x45, 0x46]),
             ("轮速", [0x50, 0x51, 0x52, 0x53]),
+            ("DT35", [0x80, 0x81, 0x82, 0x83]),
         ):
             b = QPushButton(label)
             b.setFocusPolicy(Qt.NoFocus)

@@ -33,9 +33,11 @@ class Plant:
     """一阶惯性对象 + PID，用来产生像样的调试曲线。"""
 
     def __init__(self):
-        self.pid = {}
+        self.pid = {}      # RAM 中当前生效的参数
+        self.flash = {}    # Flash 中已固化的参数（掉电不丢的那份）
         for pid_id in (0, 1, 2, 3, 0x10, 0x11, 0x20, 0x21):
             self.pid[pid_id] = dict(kp=1.2, ki=0.08, kd=0.01, i_limit=500.0, out_limit=8000.0)
+            self.flash[pid_id] = dict(self.pid[pid_id])
         self.target = {k: 0.0 for k in self.pid}
         self.fb = {k: 0.0 for k in self.pid}
         self.integ = {k: 0.0 for k in self.pid}
@@ -112,11 +114,15 @@ class Sim:
             print(f"[sim] MODE -> {d['mode']}")
             self.ack(c, fr.seq)
         elif c == int(P.Cmd.PID_READ):
-            ids = list(self.plant.pid) if d["pid_id"] == 0xFF else [d["pid_id"]]
+            src = d.get("source", 0)
+            store = self.plant.flash if src == 1 else self.plant.pid
+            ids = list(store) if d["pid_id"] == 0xFF else [d["pid_id"]]
             for i in ids:
-                if i in self.plant.pid:
-                    v = dict(self.plant.pid[i])
+                if i in store:
+                    v = dict(store[i])
                     v["pid_id"] = i
+                    v["source"] = src
+                    v["dirty"] = 0 if self.plant.pid[i] == self.plant.flash[i] else 1
                     self.send(P.Cmd.PID_VALUE, v)
         elif c == int(P.Cmd.PID_WRITE):
             i = d["pid_id"]
@@ -124,13 +130,39 @@ class Sim:
                 for k in ("kp", "ki", "kd", "i_limit", "out_limit"):
                     self.plant.pid[i][k] = d[k]
                 self.cur_pid = i
+                where = "RAM"
+                if d.get("target", 0) == 1:          # 一步到位写 Flash
+                    self.plant.flash[i] = dict(self.plant.pid[i])
+                    where = "RAM+FLASH"
                 self.ack(c, fr.seq)
-                print(f"[sim] PID_WRITE 0x{i:02X} kp={d['kp']:.3f} ki={d['ki']:.3f} kd={d['kd']:.3f}")
+                print(f"[sim] PID_WRITE[{where}] 0x{i:02X} "
+                      f"kp={d['kp']:.3f} ki={d['ki']:.3f} kd={d['kd']:.3f}")
             else:
                 self.ack(c, fr.seq, 3)
         elif c == int(P.Cmd.PID_SAVE):
+            ids = list(self.plant.pid) if d["pid_id"] == 0xFF else [d["pid_id"]]
+            ok = True
+            for i in ids:
+                if i in self.plant.pid:
+                    self.plant.flash[i] = dict(self.plant.pid[i])
+                else:
+                    ok = False
+            time.sleep(0.02)                          # 模拟 Flash 擦写耗时
+            self.ack(c, fr.seq, 0 if ok else 3)
+            print(f"[sim] PID_SAVE -> FLASH {[hex(i) for i in ids]} {'OK' if ok else 'ERR'}")
+            self.send(P.Cmd.LOG, {"level": 1, "text": f"PID saved to flash x{len(ids)}"})
+        elif c == int(P.Cmd.PID_REVERT):
+            ids = list(self.plant.flash) if d["pid_id"] == 0xFF else [d["pid_id"]]
+            for i in ids:
+                if i in self.plant.flash:
+                    self.plant.pid[i] = dict(self.plant.flash[i])
             self.ack(c, fr.seq)
-            self.send(P.Cmd.LOG, {"level": 1, "text": "PID saved to flash"})
+            print(f"[sim] PID_REVERT <- FLASH {[hex(i) for i in ids]}")
+            for i in ids:                              # 主动回报，刷新上位机界面
+                if i in self.plant.pid:
+                    v = dict(self.plant.pid[i])
+                    v.update(pid_id=i, source=0, dirty=0)
+                    self.send(P.Cmd.PID_VALUE, v)
         elif c == int(P.Cmd.PID_TARGET):
             i = d["pid_id"]
             if i in self.plant.target:
@@ -193,7 +225,42 @@ class Sim:
             return (self.vx + (1 if cid in (0x55, 0x57) else -1) * self.vy) / 20.0
         if 0x70 <= cid <= 0x77:            # 用户通道
             return math.sin(t * (1 + (cid - 0x70) * 0.3)) * 100
+        if 0x80 <= cid <= 0x8A:            # DT35 激光测距
+            return self.dt35_value(cid)
 
+        return 0.0
+
+    # ---- DT35 激光测距模拟 ----
+    # 假设车在一个 4m x 4m 的房间里，四周装了 DT35，距离随位置/航向变化
+    ROOM = 4000.0    # mm
+
+    def dt35_value(self, cid: int) -> float:
+        n = random.gauss(0, 1.5)                 # DT35 精度约 ±1~2mm
+        x = self.odom_x * 1000.0 + self.ROOM / 2
+        y = self.odom_y * 1000.0 + self.ROOM / 2
+        x = min(max(x, 100.0), self.ROOM - 100)
+        y = min(max(y, 100.0), self.ROOM - 100)
+        front, back = self.ROOM - x, x
+        left, right = self.ROOM - y, y
+        # 航向偏斜会让测距变长（1/cos 修正）
+        k = 1.0 / max(math.cos(math.radians(self.yaw % 90)), 0.3)
+        table = {
+            0x80: front * k, 0x81: back * k, 0x82: left * k, 0x83: right * k,
+            0x84: math.hypot(front, left) * 0.8, 0x85: math.hypot(front, right) * 0.8,
+            0x86: math.hypot(back, left) * 0.8, 0x87: math.hypot(back, right) * 0.8,
+        }
+        if cid in table:
+            v = table[cid] + n
+            return float(min(max(v, 50.0), 35000.0))   # DT35 量程 50mm~35m
+        if cid == 0x88:      # 模拟量输出 4~20mA -> 0~10V，这里给 mV
+            d = min(max(front, 50.0), 10000.0)
+            return d / 10000.0 * 10000.0 + n
+        if cid == 0x89:      # 左右差值算贴边角度
+            dl = table[0x82] + random.gauss(0, 1)
+            dr = table[0x83] + random.gauss(0, 1)
+            return math.degrees(math.atan2(dl - dr, self.ROOM)) 
+        if cid == 0x8A:      # 有效性位图：全部有效
+            return float(0xFF)
         return 0.0
 
     def tick(self, dt: float):

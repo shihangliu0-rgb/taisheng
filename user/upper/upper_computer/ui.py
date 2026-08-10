@@ -102,6 +102,9 @@ class MainWindow(QMainWindow):
         self.t0 = time.monotonic()
         self.keymap_enabled = False
         self.pid_cache: Dict[int, Dict[str, float]] = {}
+        self.pid_ram: Dict[int, Dict[str, float]] = {}    # RAM 当前值
+        self.pid_flash: Dict[int, Dict[str, float]] = {}  # Flash 已存值
+        self.pending_flash: Optional[int] = None
         self.rx_frame_count = 0
         self._last_stat_t = time.time()
         self._last_tx_frames = 0
@@ -387,19 +390,23 @@ class MainWindow(QMainWindow):
         for pid_id in self.cfg.pid_ids:
             label = P.PID_ID_ENUM.get(pid_id, f"USER 0x{pid_id:02X}")
             self.cmb_pid.addItem(f"0x{pid_id:02X}  {label}", pid_id)
-        btn_read = QPushButton("读取当前 PID")
-        btn_read.clicked.connect(lambda: self._send(P.Cmd.PID_READ,
-                                                    {"pid_id": self.cmb_pid.currentData()}))
+        btn_read = QPushButton("读取 RAM 当前值")
+        btn_read.setFocusPolicy(Qt.NoFocus)
+        btn_read.clicked.connect(lambda: self._send(
+            P.Cmd.PID_READ, {"pid_id": self.cmb_pid.currentData(), "source": 0}))
+        btn_read_flash = QPushButton("读取 Flash 已存值")
+        btn_read_flash.setFocusPolicy(Qt.NoFocus)
+        btn_read_flash.clicked.connect(lambda: self._send(
+            P.Cmd.PID_READ, {"pid_id": self.cmb_pid.currentData(), "source": 1}))
         btn_read_all = QPushButton("读取全部")
-        btn_read_all.clicked.connect(lambda: self._send(P.Cmd.PID_READ, {"pid_id": 0xFF}))
-        btn_save = QPushButton("固化到 Flash")
-        btn_save.clicked.connect(lambda: self._send(P.Cmd.PID_SAVE,
-                                                    {"pid_id": self.cmb_pid.currentData()}))
+        btn_read_all.setFocusPolicy(Qt.NoFocus)
+        btn_read_all.clicked.connect(lambda: self._send(
+            P.Cmd.PID_READ, {"pid_id": 0xFF, "source": 0}))
         top.addWidget(QLabel("PID 通道"))
         top.addWidget(self.cmb_pid, 1)
         top.addWidget(btn_read)
+        top.addWidget(btn_read_flash)
         top.addWidget(btn_read_all)
-        top.addWidget(btn_save)
         self.cmb_pid.currentIndexChanged.connect(self._load_pid_to_form)
         lay.addLayout(top)
 
@@ -444,21 +451,65 @@ class MainWindow(QMainWindow):
         hsq.addWidget(self.sp_sq_period)
         hsq.addWidget(self.btn_square)
         f.addRow("方波幅值/周期", hsq)
+        body.addWidget(g_edit, 1)
 
-        self.btn_send_pid = QPushButton("发送 PID 参数")
-        self.btn_send_pid.setMinimumHeight(40)
-        self.btn_send_pid.clicked.connect(self._send_pid)
-        f.addRow(self.btn_send_pid)
+        # ---- 两级保存：先写 RAM 调，满意了再落 Flash ----
+        g_store = QGroupBox("保存方案（先调 RAM，满意后再写 Flash）")
+        vs = QVBoxLayout(g_store)
+
+        self.btn_send_ram = QPushButton("① 写入 RAM（立即生效 · 掉电丢失）")
+        self.btn_send_ram.setMinimumHeight(46)
+        self.btn_send_ram.setFocusPolicy(Qt.NoFocus)
+        self.btn_send_ram.setStyleSheet(
+            "background:#0E639C;color:white;font-size:14px;font-weight:bold")
+        self.btn_send_ram.setToolTip(
+            "只改内存，马上就能看效果。反复调这个按钮，不会磨损 Flash。")
+        self.btn_send_ram.clicked.connect(self._send_pid_ram)
+        vs.addWidget(self.btn_send_ram)
+
+        self.btn_save_flash = QPushButton("② 写入 Flash（固化 · 掉电不丢）")
+        self.btn_save_flash.setMinimumHeight(46)
+        self.btn_save_flash.setFocusPolicy(Qt.NoFocus)
+        self.btn_save_flash.setStyleSheet(
+            "background:#0E7C4A;color:white;font-size:14px;font-weight:bold")
+        self.btn_save_flash.setToolTip(
+            "把 RAM 里当前生效的参数固化到 Flash。调好了再点。")
+        self.btn_save_flash.clicked.connect(self._save_pid_flash)
+        vs.addWidget(self.btn_save_flash)
+
+        hrow = QHBoxLayout()
+        self.btn_revert = QPushButton("放弃改动，从 Flash 恢复")
+        self.btn_revert.setFocusPolicy(Qt.NoFocus)
+        self.btn_revert.setToolTip("调乱了想反悔时用，把 Flash 里的值重新load回 RAM。")
+        self.btn_revert.clicked.connect(self._revert_pid)
+        self.chk_save_all = QCheckBox("对全部通道操作")
+        self.chk_save_all.setToolTip("勾上后 ②/恢复 作用于所有 PID 通道（pid_id=0xFF）")
+        hrow.addWidget(self.btn_revert)
+        hrow.addWidget(self.chk_save_all)
+        vs.addLayout(hrow)
+
+        self.lbl_dirty = QLabel("● 未读取参数")
+        self.lbl_dirty.setFont(QFont("Arial", 11, QFont.Bold))
+        self.lbl_dirty.setStyleSheet("color:#9AA0A6")
+        vs.addWidget(self.lbl_dirty)
 
         self.lbl_pid_state = QLabel("尚未读取")
         self.lbl_pid_state.setStyleSheet("color:#9AA0A6")
-        f.addRow("状态", self.lbl_pid_state)
-        body.addWidget(g_edit, 1)
+        self.lbl_pid_state.setWordWrap(True)
+        vs.addWidget(self.lbl_pid_state)
+
+        hint = QLabel("实时模式下改动参数会自动写 RAM；Flash 永远只在点②时才写。")
+        hint.setStyleSheet("color:#9AA0A6")
+        hint.setWordWrap(True)
+        vs.addWidget(hint)
+        vs.addStretch(1)
+        body.addWidget(g_store)
 
         g_tab = QGroupBox("已读取的 PID 表")
         vt = QVBoxLayout(g_tab)
-        self.tbl_pid = QTableWidget(0, 6)
-        self.tbl_pid.setHorizontalHeaderLabels(["ID", "Kp", "Ki", "Kd", "积分限幅", "输出限幅"])
+        self.tbl_pid = QTableWidget(0, 7)
+        self.tbl_pid.setHorizontalHeaderLabels(
+            ["ID", "来源", "Kp", "Ki", "Kd", "积分限幅", "输出限幅"])
         self.tbl_pid.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tbl_pid.setEditTriggers(QAbstractItemView.NoEditTriggers)
         vt.addWidget(self.tbl_pid)
@@ -757,7 +808,10 @@ class MainWindow(QMainWindow):
         else:
             self.hb_timer.stop()
         self.btn_send_motion.setEnabled(True)
-        self.btn_send_pid.setText("发送 PID 参数" + ("（实时模式自动发送）" if s.mode == "realtime" else ""))
+        if hasattr(self, "btn_send_ram"):
+            self.btn_send_ram.setText(
+                "① 写入 RAM（实时模式：改动即自动写）" if s.mode == "realtime"
+                else "① 写入 RAM（立即生效 · 掉电丢失）")
 
     @property
     def realtime(self) -> bool:
@@ -934,18 +988,84 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # PID
     # ------------------------------------------------------------------
-    def _pid_values(self) -> dict:
+    def _pid_values(self, target: int = 0) -> dict:
         v = {k: sp.value() for k, sp in self.pid_fields.items()}
         v["pid_id"] = self.cmb_pid.currentData()
+        v["target"] = target      # 0=只写 RAM，1=同时写 Flash
         return v
 
-    def _on_pid_changed(self):
-        if self.realtime and self.link.connected:
-            self._send(P.Cmd.PID_WRITE, self._pid_values())
+    def _save_scope_id(self) -> int:
+        """②/恢复 的作用范围：当前通道 或 全部(0xFF)。"""
+        return 0xFF if self.chk_save_all.isChecked() else self.cmb_pid.currentData()
 
-    def _send_pid(self):
-        self._send(P.Cmd.PID_WRITE, self._pid_values())
-        self.lbl_pid_state.setText("已发送，等待 ACK …")
+    def _on_pid_changed(self):
+        """界面数值变动：实时模式下自动写 RAM（绝不自动写 Flash）。"""
+        pid_id = self.cmb_pid.currentData()
+        self.pid_ram[pid_id] = {k: sp.value() for k, sp in self.pid_fields.items()}
+        if self.realtime and self.link.connected:
+            self._send(P.Cmd.PID_WRITE, self._pid_values(target=0))
+        self._update_dirty()
+
+    def _send_pid_ram(self):
+        """① 写 RAM。"""
+        self._send(P.Cmd.PID_WRITE, self._pid_values(target=0))
+        pid_id = self.cmb_pid.currentData()
+        self.pid_ram[pid_id] = {k: sp.value() for k, sp in self.pid_fields.items()}
+        self.lbl_pid_state.setText("已写入 RAM，等待 ACK …")
+        self._update_dirty()
+
+    def _save_pid_flash(self):
+        """② 固化到 Flash，先确认，避免误触磨损 Flash。"""
+        pid_id = self._save_scope_id()
+        scope = "全部通道" if pid_id == 0xFF else \
+            f"通道 0x{pid_id:02X}（{P.PID_ID_ENUM.get(pid_id, '自定义')}）"
+        r = QMessageBox.question(
+            self, "写入 Flash",
+            f"确认把 RAM 中当前参数固化到 Flash？\n\n作用范围：{scope}\n\n"
+            "Flash 有擦写寿命，建议参数调好后再执行。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if r != QMessageBox.Yes:
+            return
+        # 先补一次 RAM 写，确保 Flash 存下来的就是界面上看到的
+        self._send(P.Cmd.PID_WRITE, self._pid_values(target=0))
+        self._send(P.Cmd.PID_SAVE, {"pid_id": pid_id})
+        self.pending_flash = pid_id
+        self.lbl_pid_state.setText("正在写入 Flash，等待 ACK …")
+        self.log(f"PID_SAVE -> Flash（{scope}）", "#7CD992")
+
+    def _revert_pid(self):
+        pid_id = self._save_scope_id()
+        r = QMessageBox.question(
+            self, "放弃改动",
+            "放弃 RAM 中的临时改动，从 Flash 重新加载参数？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        self._send(P.Cmd.PID_REVERT, {"pid_id": pid_id})
+        self._send(P.Cmd.PID_READ, {"pid_id": self.cmb_pid.currentData(), "source": 0})
+        self.lbl_pid_state.setText("已请求从 Flash 恢复 …")
+
+    def _update_dirty(self):
+        """比较 RAM 值与 Flash 值，提示是否有未保存改动。"""
+        pid_id = self.cmb_pid.currentData()
+        ram = self.pid_ram.get(pid_id)
+        flash = self.pid_flash.get(pid_id)
+        if ram is None:
+            self.lbl_dirty.setText("● 未读取参数")
+            self.lbl_dirty.setStyleSheet("color:#9AA0A6")
+            return
+        if flash is None:
+            self.lbl_dirty.setText("● RAM 已改 · Flash 值未知（可点『读取 Flash 已存值』对比）")
+            self.lbl_dirty.setStyleSheet("color:#FFB74D")
+            return
+        diff = [k for k in ("kp", "ki", "kd", "i_limit", "out_limit")
+                if abs(float(ram.get(k, 0)) - float(flash.get(k, 0))) > 1e-6]
+        if diff:
+            self.lbl_dirty.setText(f"● 有未保存改动：{', '.join(diff)} —— 点②写入 Flash")
+            self.lbl_dirty.setStyleSheet("color:#FFB74D;font-weight:bold")
+        else:
+            self.lbl_dirty.setText("● RAM 与 Flash 一致，已保存")
+            self.lbl_dirty.setStyleSheet("color:#7CD992;font-weight:bold")
 
     def _send_target(self):
         self._send(P.Cmd.PID_TARGET, {"pid_id": self.cmb_pid.currentData(),
@@ -981,17 +1101,24 @@ class MainWindow(QMainWindow):
             sp.blockSignals(False)
         self.lbl_pid_state.setText("已载入下位机当前值")
 
-    def _update_pid_table(self, pid_id: int, d: dict):
+    def _update_pid_table(self, pid_id: int, d: dict, source: int = 0):
+        """RAM 与 Flash 各占一行，方便直接对比。"""
+        tag = "Flash" if source == 1 else "RAM"
+        key = f"0x{pid_id:02X}"
         row = None
         for r in range(self.tbl_pid.rowCount()):
-            if self.tbl_pid.item(r, 0).text() == f"0x{pid_id:02X}":
+            if (self.tbl_pid.item(r, 0).text() == key
+                    and self.tbl_pid.item(r, 1).text() == tag):
                 row = r
                 break
         if row is None:
             row = self.tbl_pid.rowCount()
             self.tbl_pid.insertRow(row)
-            self.tbl_pid.setItem(row, 0, QTableWidgetItem(f"0x{pid_id:02X}"))
-        for c, k in enumerate(("kp", "ki", "kd", "i_limit", "out_limit"), start=1):
+            self.tbl_pid.setItem(row, 0, QTableWidgetItem(key))
+            it = QTableWidgetItem(tag)
+            it.setForeground(QColor("#7CD992" if source == 1 else "#4FC3F7"))
+            self.tbl_pid.setItem(row, 1, it)
+        for c, k in enumerate(("kp", "ki", "kd", "i_limit", "out_limit"), start=2):
             self.tbl_pid.setItem(row, c, QTableWidgetItem(f"{d.get(k, 0.0):.4f}"))
 
     # ------------------------------------------------------------------
@@ -1080,10 +1207,25 @@ class MainWindow(QMainWindow):
 
         if fr.cmd == int(P.Cmd.PID_VALUE):
             pid_id = d.get("pid_id", 0)
-            self.pid_cache[pid_id] = d
-            self._update_pid_table(pid_id, d)
+            src = d.get("source", 0)
+            if src == 1:
+                self.pid_flash[pid_id] = d      # Flash 里存的值
+            else:
+                self.pid_cache[pid_id] = d      # RAM 当前值
+                self.pid_ram[pid_id] = d
+                if d.get("dirty", 0) == 0 and pid_id not in self.pid_flash:
+                    # 下位机说不脏，那 Flash 值就等于 RAM 值
+                    self.pid_flash[pid_id] = dict(d)
+            self._update_pid_table(pid_id, d, src)
             if pid_id == self.cmb_pid.currentData():
-                self._load_pid_to_form()
+                if src == 0:
+                    self._load_pid_to_form()
+                else:
+                    self.lbl_pid_state.setText(
+                        "已读回 Flash 值：" + "  ".join(
+                            f"{k}={d.get(k,0):.4g}"
+                            for k in ("kp", "ki", "kd")))
+                self._update_dirty()
         elif fr.cmd == int(P.Cmd.STREAM_DATA):
             self._on_stream_data(d)
             return
@@ -1099,8 +1241,24 @@ class MainWindow(QMainWindow):
             self.pid_scope.update()
             return
         elif fr.cmd == int(P.Cmd.ACK):
-            st = P.ACK_STATUS.get(d.get("status", 0), "?")
-            self.lbl_pid_state.setText(f"ACK: 0x{d.get('ack_cmd',0):02X} -> {st}")
+            ack_cmd = d.get("ack_cmd", 0)
+            status = d.get("status", 0)
+            st = P.ACK_STATUS.get(status, "?")
+            self.lbl_pid_state.setText(f"ACK: 0x{ack_cmd:02X} -> {st}")
+            if ack_cmd == int(P.Cmd.PID_SAVE):
+                if status == 0:
+                    pid_id = getattr(self, "pending_flash", None)
+                    ids = list(self.pid_ram) if pid_id == 0xFF else [pid_id]
+                    for i in ids:
+                        if i in self.pid_ram:
+                            self.pid_flash[i] = dict(self.pid_ram[i])
+                    self.pending_flash = None
+                    self.log("✓ Flash 写入成功，参数已固化", "#7CD992")
+                else:
+                    self.log(f"✗ Flash 写入失败: {st}", "#FF6E6E")
+                self._update_dirty()
+            elif ack_cmd == int(P.Cmd.PID_REVERT) and status == 0:
+                self.log("已从 Flash 恢复参数", "#7CD992")
         elif fr.cmd == int(P.Cmd.LOG):
             lvl = d.get("level", 1)
             color = {0: "#888", 1: "#DDD", 2: "#FFB74D", 3: "#FF6E6E"}.get(lvl, "#DDD")

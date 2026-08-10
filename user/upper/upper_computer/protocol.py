@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Dict, List, Optional, Tuple
 
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # 帧结构常量
@@ -37,9 +37,10 @@ class Cmd(IntEnum):  # noqa: E301
     BRAKE = 0x03          # 制动 / 急停
     MODE = 0x04           # 控制模式切换
     PID_READ = 0x10       # 请求读取 PID
-    PID_WRITE = 0x11      # 写入 PID
-    PID_SAVE = 0x12       # PID 保存到 Flash
+    PID_WRITE = 0x11      # 写入 PID（可选只写 RAM 或同时写 Flash）
+    PID_SAVE = 0x12       # 把 RAM 中当前 PID 固化到 Flash
     PID_TARGET = 0x13     # 设置某个环的目标值（阶跃调试）
+    PID_REVERT = 0x14     # 放弃 RAM 改动，从 Flash 重新加载
     PARAM_READ = 0x20     # 通用参数读
     PARAM_WRITE = 0x21    # 通用参数写
     TELEM_CTRL = 0x30     # 遥测使能 / 周期设置
@@ -242,6 +243,21 @@ _ch(0x55, "wheel_rf_set", "rpm", "右前轮目标转速", "轮子")
 _ch(0x56, "wheel_lb_set", "rpm", "左后轮目标转速", "轮子")
 _ch(0x57, "wheel_rb_set", "rpm", "右后轮目标转速", "轮子")
 
+# --- DT35 激光测距 (0x80-0x8F) ---
+# 常见用法：车身四周各装一个，用于贴边/找墙/定位校正
+_ch(0x80, "dt35_front", "mm", "DT35 前向距离", "DT35 激光测距")
+_ch(0x81, "dt35_back", "mm", "DT35 后向距离", "DT35 激光测距")
+_ch(0x82, "dt35_left", "mm", "DT35 左侧距离", "DT35 激光测距")
+_ch(0x83, "dt35_right", "mm", "DT35 右侧距离", "DT35 激光测距")
+_ch(0x84, "dt35_lf", "mm", "DT35 左前距离", "DT35 激光测距")
+_ch(0x85, "dt35_rf", "mm", "DT35 右前距离", "DT35 激光测距")
+_ch(0x86, "dt35_lb", "mm", "DT35 左后距离", "DT35 激光测距")
+_ch(0x87, "dt35_rb", "mm", "DT35 右后距离", "DT35 激光测距")
+_ch(0x88, "dt35_raw_mv", "mV", "DT35 原始模拟量（模拟输出型接 ADC 时用）", "DT35 激光测距")
+_ch(0x89, "dt35_yaw_calc", "deg", "由左右两个 DT35 差值算出的贴边角度", "DT35 激光测距")
+_ch(0x8A, "dt35_valid", "-", "有效性位图 bit0..bit7 对应 0x80..0x87，1=数据有效",
+    "DT35 激光测距")
+
 # --- 电源 / 系统 (0x60-0x6F) ---
 _ch(0x60, "battery_v", "V", "电池电压", "电源/系统")
 _ch(0x61, "battery_a", "A", "总电流", "电源/系统")
@@ -269,6 +285,20 @@ ACK_STATUS = {
     2: "ERR_CMD   未知命令",
     3: "ERR_ARG   参数非法",
     4: "ERR_BUSY  设备忙",
+    5: "ERR_FLASH Flash 擦写失败",
+    6: "ERR_LOCK  参数被锁定，不允许修改",
+}
+
+# 参数存储目标：调试时只写 RAM，满意了再落 Flash
+STORE_TARGET = {
+    0: "RAM    只写内存，立即生效、掉电丢失（调试用，不磨损 Flash）",
+    1: "FLASH  写内存的同时固化到 Flash，掉电不丢",
+}
+
+# PID_VALUE 回报里的来源标记
+PID_SRC = {
+    0: "RAM    当前生效值（可能含未保存的临时改动）",
+    1: "FLASH  Flash 中已保存的值",
 }
 
 
@@ -328,12 +358,18 @@ MSG_PID_READ = _reg(Message(
     "请求读取指定 PID 参数。下位机收到后应回 PID_VALUE(0x90)。pid_id=0xFF 表示读取全部（逐条回）。",
     [
         Field("pid_id", "u8", "-", "PID 通道号", enum=PID_ID_ENUM),
+        Field("source", "u8", "-", "读哪一份：0=RAM当前值(默认) 1=Flash已存值",
+              enum=PID_SRC),
     ],
+    notes="读 Flash 值可用来和当前 RAM 值做对比，确认改动是否已保存。"
+          "老固件按 1 字节解析也不受影响（source 在末尾，缺省按 0）。",
 ))
 
 MSG_PID_WRITE = _reg(Message(
     Cmd.PID_WRITE, "PID_WRITE", "PC->MCU",
-    "写入 PID 参数（仅内存生效，掉电丢失；需要固化调用 PID_SAVE）。",
+    "写入 PID 参数。**默认只写 RAM（掉电丢失），适合反复试参数**；"
+    "调好之后再用 PID_SAVE(0x12) 固化到 Flash。也可以把 target 直接设成 1 一步到位写 Flash，"
+    "但调试阶段不建议，Flash 有擦写寿命。",
     [
         Field("pid_id", "u8", "-", "PID 通道号", enum=PID_ID_ENUM),
         Field("kp", "f32", "-", "比例系数"),
@@ -341,15 +377,32 @@ MSG_PID_WRITE = _reg(Message(
         Field("kd", "f32", "-", "微分系数"),
         Field("i_limit", "f32", "-", "积分限幅（0 表示不限）"),
         Field("out_limit", "f32", "-", "输出限幅（0 表示不限）"),
+        Field("target", "u8", "-", "存储目标：0=只写RAM(默认) 1=同时写Flash",
+              enum=STORE_TARGET),
     ],
+    notes="target 放在末尾，向后兼容：老固件按 21 字节解析前面字段不受影响；"
+          "新固件收到 22 字节时取最后一字节，收到 21 字节按 0（只写 RAM）处理。",
 ))
 
 MSG_PID_SAVE = _reg(Message(
     Cmd.PID_SAVE, "PID_SAVE", "PC->MCU",
-    "将当前 PID 参数写入 Flash/EEPROM。",
+    "把 RAM 里当前生效的 PID 固化到 Flash/EEPROM。**这是『调好了，存下来』的动作**，"
+    "上位机点『写入 Flash』时发送。",
     [
         Field("pid_id", "u8", "-", "通道号，0xFF = 全部", enum=PID_ID_ENUM),
     ],
+    notes="建议下位机写完回 ACK(0x80)，status=0 表示烧写成功。"
+          "Flash 擦写期间若会关中断导致通信卡顿，请在回 ACK 后再执行。",
+))
+
+MSG_PID_REVERT = _reg(Message(
+    Cmd.PID_REVERT, "PID_REVERT", "PC->MCU",
+    "放弃 RAM 中的临时改动，从 Flash 重新加载参数到 RAM。"
+    "调参调乱了想一键还原到上次保存的状态时用。",
+    [
+        Field("pid_id", "u8", "-", "通道号，0xFF = 全部", enum=PID_ID_ENUM),
+    ],
+    notes="下位机重新加载后，建议主动回一条 PID_VALUE(0x90) 让上位机界面同步刷新。",
 ))
 
 MSG_PID_TARGET = _reg(Message(
@@ -439,7 +492,11 @@ MSG_PID_VALUE = _reg(Message(
         Field("kd", "f32", "-", "微分"),
         Field("i_limit", "f32", "-", "积分限幅"),
         Field("out_limit", "f32", "-", "输出限幅"),
+        Field("source", "u8", "-", "本条数据来自哪：0=RAM 1=Flash", enum=PID_SRC),
+        Field("dirty", "u8", "-", "1 = RAM 值与 Flash 不一致（有未保存改动）"),
     ],
+    notes="`dirty` 让上位机能提示『当前参数尚未写入 Flash』。"
+          "下位机若不想实现，固定填 0 即可。",
 ))
 
 MSG_TELEMETRY = _reg(Message(

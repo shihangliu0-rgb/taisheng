@@ -74,19 +74,19 @@ float upper_read_channel(uint8_t channel_id)
     case 0x03U: return Imu_GetYaw();
     case 0x12U: return Imu_GetGyroZ();
 
-    /* 融合速度/位置 */
+    /* 融合位置(m) / 速度(mm/s, 与上位机 vel_x/vel_y 单位一致) */
     case 0x40U: return ImuFusion_GetPosX();
     case 0x41U: return ImuFusion_GetPosY();
-    case 0x44U: return ImuFusion_GetVelX();
-    case 0x45U: return ImuFusion_GetVelY();
+    case 0x44U: return ImuFusion_GetVelX() * 1000.0f;   /* m/s → mm/s */
+    case 0x45U: return ImuFusion_GetVelY() * 1000.0f;   /* m/s → mm/s */
 
-    /* DT35 激光(单位 cm，上位机按 cm 显示) */
-    case 0x70U: return (float)dt35_distance_40_cm;
-    case 0x71U: return (float)dt35_distance_41_cm;
+    /* DT35 激光(cm, 上位机按 mm 显示 — 这里直接给 cm 值) */
+    case 0x80U: return (float)dt35_distance_40_cm;   /* dt35_front */
+    case 0x82U: return (float)dt35_distance_41_cm;   /* dt35_left  */
 
-    /* 融合诊断 */
-    case 0x72U: return ImuFusion_GetEncoderWeight();
-    case 0x73U: return (float)ImuFusion_GetEncoderAgeMs();
+    /* 融合诊断(user 通道) */
+    case 0x72U: return ImuFusion_GetEncoderWeight();   /* user_2: 编码器权重 */
+    case 0x73U: return (float)ImuFusion_GetEncoderAgeMs(); /* user_3: 编码器年龄 ms */
 
     default: return 0.0f;
     }
