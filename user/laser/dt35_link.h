@@ -8,7 +8,7 @@
  * 这里默认用空闲的 huart2(USART2 PA2/PA3，已在 usart.c 初始化)。
  * 换口只改这里，不修改 usart.c；需保证所填 huartX 已在 usart.c 里初始化。 */
 #ifndef DT35_UART_HANDLE
-#define DT35_UART_HANDLE   huart2
+#define DT35_UART_HANDLE   huart9
 #endif
 
 /* UART 总线上两个 DT35 传感器的固定地址。 */

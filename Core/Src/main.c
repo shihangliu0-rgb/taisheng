@@ -115,6 +115,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_UART4_Init();
+  MX_UART8_Init();    /* UART8 PE0/PE1 2M — 预留给导航上位机 */
+  MX_UART9_Init();    /* UART9 PD14/PD15 115200 — DT35 激光 */
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
