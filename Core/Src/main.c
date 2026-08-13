@@ -30,6 +30,7 @@
 #include "imu_main.h"
 #include "upper_protocol.h"
 #include "dt35_link.h"
+#include "xiaodianji_link.h"
 
 /* USER CODE END Includes */
 
@@ -232,6 +233,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   Upper_RxCplt(huart);
   DT35Link_RxCplt(huart);
+  Xiaodianji_RxCplt(huart);
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
@@ -243,6 +245,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   Upper_Error(huart);
   DT35Link_Error(huart);
+  Xiaodianji_Error(huart);
   ImuMain_HandleUartError(huart);
 }
 
