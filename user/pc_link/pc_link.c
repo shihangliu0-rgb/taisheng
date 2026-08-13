@@ -38,6 +38,10 @@ static uint8_t rx_ring[PC_LINK_RX_BUFFER_SIZE];             /* 环形缓冲区 *
 static volatile uint16_t rx_ring_head;                      /* ISR 写入 */
 static uint16_t rx_ring_tail;                               /* 任务读取 */
 
+static volatile uint32_t rx_frame_count;                    /* 通过校验的好帧数 */
+static volatile uint32_t rx_position_frame_count;           /* 通过校验的 0x11 位置帧数 */
+static volatile uint32_t crc_error_count;                   /* 帧尾/校验和错误帧数 */
+
 static pc_rx_state_t rx_state;
 static uint8_t rx_frame[PC_LINK_PERCEPTION_FRAME_SIZE];     /* 最长帧 44B,兼容 24B */
 static uint8_t rx_index;
@@ -125,6 +129,7 @@ static void decode_frame(void)
     if ((rx_frame[length - 2U] != PC_LINK_TAIL_0) ||
         (rx_frame[length - 1U] != PC_LINK_TAIL_1))
     {
+        crc_error_count++;
         return;
     }
 
@@ -132,7 +137,14 @@ static void decode_frame(void)
     if (rx_frame[checksum_index] !=
         checksum8(&rx_frame[2], (uint8_t)(checksum_index - 2U)))
     {
+        crc_error_count++;
         return;
+    }
+
+    rx_frame_count++;
+    if (type == PC_LINK_TYPE_POSITION)
+    {
+        rx_position_frame_count++;
     }
 
     if (type == PC_LINK_TYPE_PERCEPTION)
@@ -315,6 +327,9 @@ HAL_StatusTypeDef PcLink_Init(void)
 
     rx_ring_head = 0U;
     rx_ring_tail = 0U;
+    rx_frame_count = 0U;
+    rx_position_frame_count = 0U;
+    crc_error_count = 0U;
     (void)memset(rx_frame, 0, sizeof(rx_frame));
     (void)memset(&perception, 0, sizeof(perception));
     (void)memset(&position, 0, sizeof(position));
@@ -467,6 +482,23 @@ bool PcLink_IsOnline(void)
 
     return (((uint32_t)(now - last_perception_ms) <= PC_LINK_DATA_TIMEOUT_MS) ||
             ((uint32_t)(now - last_position_ms) <= PC_LINK_DATA_TIMEOUT_MS));
+}
+
+void PcLink_GetStats(uint32_t *frames, uint32_t *crc_errors)
+{
+    if (frames != NULL)
+    {
+        *frames = rx_frame_count;
+    }
+    if (crc_errors != NULL)
+    {
+        *crc_errors = crc_error_count;
+    }
+}
+
+uint32_t PcLink_GetPositionSeq(void)
+{
+    return rx_position_frame_count;
 }
 
 #endif /* PC_LINK_ENABLE */

@@ -50,50 +50,21 @@ USB-TTL GND  --  GND
 - 有效位 `flags` 无效时对应数据清零,超时(`PC_LINK_DATA_TIMEOUT_MS`)
   自动清除有效位,不沿用旧数据。
 
-## 4. 编译接入(需要手动做的 3 处,本模块未改动任何现有文件)
+## 4. 编译接入(已全部落地,无需手工操作)
 
-### (1) Keil 工程添加源文件
+以下三处已直接写入工程:
 
-把 `user/pc_link/pc_link.c` 加入 MDK-ARM 工程(建议放在与
-`user/com_link/computer_link.c` 相同的分组,头文件可选)。
+1. `MDK-ARM/b-up.uvprojx`:pc_link.c 已加入 `Application/User/com_link`
+   分组,IncludePath 已含 `../user/pc_link`;
+2. `Core/Src/main.c` USER CODE 4 区:已挂 `PcLink_RxCplt(huart)` 与
+   `PcLink_Error(huart)`(UART7 收到的每个字节都进 pc_link 解析);
+3. `Core/Src/freertos.c` StartCommTask:已调用 `PcLink_Init()`(自动把
+   huart7 重配为 115200 并启动接收)与 `PcLink_Run()`(1ms 周期解析
+   环形缓冲、超时管理、50ms 周期回传状态帧)。
 
-### (2) 串口回调分发 —— `Core/Src/main.c` 的 `USER CODE 4` 区
-
-```c
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  ComputerLink_RxCplt(huart);
-  DT35PnpLink_RxCplt(huart);
-  PcLink_RxCplt(huart);            /* ← 新增这一行 */
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  ComputerLink_Error(huart);
-  DT35PnpLink_Error(huart);
-  ImuMain_HandleUartError(huart);
-  PcLink_Error(huart);             /* ← 新增这一行 */
-}
-```
-
-并在 `main.c` 头文件区加入 `#include "pc_link.h"`。
-
-### (3) 初始化与周期调用 —— `Core/Src/freertos.c` 的 `StartCommTask`
-
-```c
-(void)ComputerLink_Init(&huart4);
-(void)DT35PnpLink_Init(&huart9);
-(void)PcLink_Init();               /* ← 新增:使用 pc_link_config.h 宏选定的串口 */
-
-for(;;)
-{
-  DT35PnpLink_Run();
-  Action_UpdatePnp(...);
-  ComputerLink_Run();
-  PcLink_Run();                    /* ← 新增:1ms 周期调用 */
-  osDelay(1);
-}
-```
+上电后小电脑即可在下位机侧拿到:感知帧/位置帧数据(下方 API),下位机
+自动回传 0x20 状态帧(规划器状态 + 停止原因),上位机网关据此判断控制器
+在线。
 
 ## 5. 使用示例(其他模块读取数据 / 上报状态)
 

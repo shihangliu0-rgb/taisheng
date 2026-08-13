@@ -129,6 +129,20 @@ void PcLink_SetStatus(uint8_t state, uint8_t error);
  */
 bool PcLink_IsOnline(void);
 
+/**
+ * @brief 读取链路统计:累计收到的好帧数与校验失败帧数(CRC 错误数)
+ * @param frames     输出:通过校验的帧数
+ * @param crc_errors 输出:帧尾/校验和错误帧数
+ */
+void PcLink_GetStats(uint32_t *frames, uint32_t *crc_errors);
+
+/**
+ * @brief 读取位置帧序号(累计收到且通过校验的 0x11 帧数)
+ * @note  上位机感知帧/位置帧交替发送,消费者可用该值判断是否收到
+ *        "新的"位置帧,避免同一帧被周期任务重复消费
+ */
+uint32_t PcLink_GetPositionSeq(void);
+
 #else /* PC_LINK_ENABLE == 0:全部接口退化为空操作 */
 
 #define PcLink_Init()              (HAL_OK)
@@ -139,6 +153,8 @@ bool PcLink_IsOnline(void);
 #define PcLink_GetPosition(p)      (false)
 #define PcLink_SetStatus(s, e)     ((void)(s), (void)(e))
 #define PcLink_IsOnline()          (false)
+#define PcLink_GetStats(f, c)      ((void)(f), (void)(c))
+#define PcLink_GetPositionSeq()    (0U)
 
 #endif /* PC_LINK_ENABLE */
 

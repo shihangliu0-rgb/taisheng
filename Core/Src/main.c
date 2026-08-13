@@ -30,6 +30,7 @@
 #include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
+#include "pc_link.h"
 
 /* USER CODE END Includes */
 
@@ -234,6 +235,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   ComputerLink_RxCplt(huart);
   DT35PnpLink_RxCplt(huart);
+  PcLink_RxCplt(huart);
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
@@ -246,6 +248,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   ComputerLink_Error(huart);
   DT35PnpLink_Error(huart);
   ImuMain_HandleUartError(huart);
+  PcLink_Error(huart);
 }
 
 /* USER CODE END 4 */

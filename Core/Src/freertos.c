@@ -31,6 +31,7 @@
 #include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
+#include "path_runner.h"
 #include "up_main.h"
 #include "usart.h"
 #include "gpio.h"
@@ -283,6 +284,8 @@ __weak void StartCommTask(void *argument)
   (void)argument;
   (void)ComputerLink_Init(&huart4);
   (void)DT35PnpLink_Init(&huart9);
+  (void)PcLink_Init();      /* 小电脑串口(默认 UART7,见 pc_link_config.h) */
+  PathRunner_Init();
 
   /* Infinite loop */
   for(;;)
@@ -291,6 +294,10 @@ __weak void StartCommTask(void *argument)
     Action_UpdatePnp(pnp_link[SENSOR_LINK_F_INDEX].trigger,
                      pnp_link[SENSOR_LINK_L_B_INDEX].trigger);
     ComputerLink_Run();
+    /* 先解析小电脑新帧,再让规划器消费,最后输出底盘指令 */
+    PcLink_Run();
+    /* 路径规划器最后执行:每个控制周期覆盖手动上位机速度指令 */
+    PathRunner_Run();
     osDelay(1);
   }
   /* USER CODE END StartCommTask */

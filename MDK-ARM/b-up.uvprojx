@@ -341,7 +341,7 @@
               <MiscControls></MiscControls>
               <Define>USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H723xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../user/up;../user/Action_api;../user/2006;../user/chassis_vesc;../user/imu;../user/com_link;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
+              <IncludePath>../Core/Inc;../user/up;../user/Action_api;../user/2006;../user/chassis_vesc;../user/imu;../user/com_link;../user/pc_link;../user/path_planner;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1527,6 +1527,21 @@
               <FileType>5</FileType>
               <FilePath>../user/com_link/dt35_pnp_link.h</FilePath>
             </File>
+            <File>
+              <FileName>pc_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/pc_link/pc_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>pc_link.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/pc_link/pc_link.h</FilePath>
+            </File>
+            <File>
+              <FileName>pc_link_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/pc_link/pc_link_config.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1551,6 +1566,46 @@
               <FileName>imu_main.h</FileName>
               <FileType>5</FileType>
               <FilePath>../user/imu/imu_main.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Application/User/path_planner</GroupName>
+          <Files>
+            <File>
+              <FileName>path_geometry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_geometry.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_spline.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_spline.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_speed_profile.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_speed_profile.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_fusion.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_fusion.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_pure_pursuit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_pure_pursuit.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_yaw_lock.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_yaw_lock.c</FilePath>
+            </File>
+            <File>
+              <FileName>path_runner.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/path_planner/path_runner.c</FilePath>
             </File>
           </Files>
         </Group>
