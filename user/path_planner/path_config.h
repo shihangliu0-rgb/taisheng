@@ -29,18 +29,26 @@
  * 1. 底盘单位换算(对接 Chassis_SetVelocity)
  * ==================================================================
  * chassis_main.c 的底盘坐标系: X 向右(平移)、Y 向前、Z 逆时针;
- * vx/vy 单位是轮子 RPM,z 是角速度单位(内部再乘
- * CHASSIS_ROTATION_SCALE = 6.8 换算成轮子 RPM 差)。
+ * vx/vy 单位是轮子 RPM,z 是角速度控制量(内部乘
+ * CHASSIS_ROTATION_SCALE = 3.5+3.30 = 6.8 转成轮子 RPM 差)。
  *
- * ⚠️ 以下两个系数是待标定项(仓库里没有轮径/轮距参数):
- *   PATH_RPM_PER_M_S = 60 / (2*pi*r),        r 默认 0.0762 m(3 英寸麦轮)
- *   PATH_Z_PER_RAD_S = w_rad_s 对应 z 单位 = (a+b)/2 / r * 60/(2*pi) / 6.8,
- *                     (a+b)/2 默认 0.34 m(由 CHASSIS_ROTATION_SCALE=6.8 反推)
+ * 参数来源(仓库内底盘解算,非估算):
+ *   - 轮半径 0.050 m     : bteam/底盘分支 chassis/app/chassis/odom_fusion.h
+ *                          ODOM_WHEEL_RADIUS_M = 0.050f
+ *   - 轴距 0.35 / 轮距 0.33 : 抬升分支 chassis_main.c 的
+ *                          CHASSIS_ROTATION_SCALE(3.5f + 3.30f)
+ *
+ * 推导(与两边代码闭合):
+ *   PATH_RPM_PER_M_S = 60/(2*pi*r) = 190.99 rpm per m/s
+ *   麦轮旋转项:轮线速度 = w * (轴距/2 + 轮距/2) = w * 0.34
+ *   所需轮 RPM = w * 0.34 * 190.99 = 64.94 * w
+ *   代码 rotation_rpm = z * 6.8 -> z = 64.94/6.8 * w = 9.549 * w
+ *   即 PATH_Z_PER_RAD_S = 60/(2*pi) = 9.549(与 6.8、0.34、0.05 三值闭合)
  */
-#define PATH_WHEEL_RADIUS_M           0.0762f
-#define PATH_RPM_PER_M_S              125.3f
-#define PATH_CHASSIS_ROT_ARM_M        0.34f
-#define PATH_Z_PER_RAD_S              6.26f
+#define PATH_WHEEL_RADIUS_M           0.050f
+#define PATH_RPM_PER_M_S              190.99f
+#define PATH_CHASSIS_ROT_ARM_M        0.34f   /* 轴距/2 + 轮距/2 = 0.175+0.165 */
+#define PATH_Z_PER_RAD_S              9.549f  /* = 60/(2*pi),z 控制量 per rad/s */
 
 /* ==================================================================
  * 2. 场地几何(field.yaml: field / walls)

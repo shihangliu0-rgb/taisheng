@@ -100,11 +100,11 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
         PathFusion_Predict(imu->gyro_z_deg_s, dt_s);
     }
 
-    /* 上位机位姿(0x11 位置帧,field_w 按已修复的 yaw_rad 理解,
-     * 见 pc_link 模块注释:小电脑当前传四元数 W 是已知 bug)。
+    /* 上位机位姿(0x11 位置帧,field_w 为 yaw_rad;小电脑侧已修复,
+     * 不再传四元数 W 分量)。
      * 去重:pc_link 保存最近一帧,本函数 5ms 调一次,同一帧会被读多次,
      * 若不去重,中值滤波窗口会被同一个跳变值填满而失去滤波意义,
-     * 因此只在"好帧计数变化"即真正收到新帧时才融合一次。 */
+     * 因此只在"位置帧序号变化"即真正收到新帧时才融合一次。 */
     {
         uint32_t pos_seq = PcLink_GetPositionSeq();
         if (PcLink_GetPosition(&upper) &&

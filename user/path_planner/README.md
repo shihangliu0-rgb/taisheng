@@ -27,9 +27,7 @@ path_runner        --Chassis_SetVelocity()---> user/chassis_vesc(4x VESC, FDCAN)
 
 - 前激光 = `dt35_link[SENSOR_LINK_F_INDEX].distance_cm`(DT35_F, 地址 0x40)
 - 左激光 = `dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm`(DT35_L, 地址 0x41)
-- 上位机 `field_w` 按 **yaw_rad** 使用;小电脑分支当前传四元数 W 分量是
-  已知 bug(见其 field.yaml protocol 段),需感知组修复后才与 yaw-lock 协同
-  (修复前 yaw 门限会自动拒绝错误 yaw,航向锁退化为纯 IMU)。
+- 上位机 `field_w` 为 **yaw_rad**(小电脑侧已修复,直接与 yaw-lock 协同)。
 
 ## 3. 坐标系(重要,勿改)
 
@@ -62,15 +60,17 @@ path_runner        --Chassis_SetVelocity()---> user/chassis_vesc(4x VESC, FDCAN)
 
 ## 5. 未知 / 待实测确认项(标定后再上车)
 
-1. **轮径/轮距无参数**:`PATH_RPM_PER_M_S`(默认按 3 英寸麦轮 125.3)与
-   `PATH_Z_PER_RAD_S`(默认 6.26,按 (a+b)/2=0.34m 反推)必须实测标定,
-   否则速度/转向增益整体偏快或偏慢;
+1. **轮径/轴距/轮距已从仓库底盘解算找到并写入**(path_config.h 第 1 节):
+   轮半径 0.050m(底盘分支 odom_fusion.h)、轴距 0.35/轮距 0.33(抬升分支
+   CHASSIS_ROTATION_SCALE=3.5+3.30),推导闭合:
+   `PATH_RPM_PER_M_S=190.99`、`PATH_Z_PER_RAD_S=9.549`。
+   装车后建议用"直行 1m / 原地转 90°"各验证一次(实测误差大再微调);
 2. **左激光安装方向**:默认按 field.yaml 车体正左(挂 0,0.175,朝 +y);
    若实车 DT35_L 朝左后或安装偏移不同,改 `PATH_LASER_LEFT_*`;
 3. **横向微调符号**:按底盘系推导为 `-Kp*err`(`PATH_LAT_TRIM_SIGN=-1`);
    若实车反而朝左墙贴,改成 `+1.0f`;左墙 <10cm 有强制向右修正保护;
-4. **上电朝向必须朝 +y**:IMU 清零与 0x11 yaw 都以此为零点;若起点朝向不同,
-   yaw-lock 目标 `PATH_YAW_TARGET_RAD` 需改为上电朝向;
+4. **上电朝向已确认与 field.yaml 一致**(yaw=0 朝 +y),`PATH_YAW_TARGET_RAD=0`
+   直接可用;
 5. **路点表补点**:在 `(1.0,2.6)` 与 `(0.5,3.7)` 之间补了拐点 `(0.5,2.6)`
    (见 path_config.h 注释):原路点直连弦线穿过 wall_C(wall_C 注释写明
    "必须走到 x=0.5 才能上翻"),补点后路径沿墙 C 西侧缺口 x<0.7 通过;

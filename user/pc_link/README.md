@@ -43,7 +43,8 @@ USB-TTL GND  --  GND
 ## 3. 协议速览
 
 - **上位机下发** 感知帧 `AA 55 10`(44B,红蓝块+金球 xyz,float 小端)
-  与位置帧 `AA 55 11`(24B,赛场 xyz + 四元数 w),同一串口 50Hz 交替;
+  与位置帧 `AA 55 11`(24B,赛场 xyz + yaw_rad),同一串口 50Hz 交替
+  (小电脑侧已修复 field_w 语义,现在按 yaw_rad 解析);
 - **下位机回传** 状态帧 `55 AA 20`(8B,state + error),要求 ≥10Hz
   (本模块默认 20Hz,`PC_LINK_STATUS_PERIOD_MS` 可调);
 - 校验和 = 帧类型字节起 8 位累加和,帧尾 `0D 0A`;
