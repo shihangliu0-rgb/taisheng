@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_fusion.c
- * @brief   IMU + ä¸Šä½æœºä½å§¿äº’è¡¥èžåˆå®žçŽ°
+ * @brief   IMU + ÉÏÎ»»úÎ»×Ë»¥²¹ÈÚºÏÊµÏÖ
  ******************************************************************************
  */
 #include "path_fusion.h"
@@ -19,14 +19,14 @@ typedef struct
 {
     float x;
     float y;
-    float yaw;                 /* ç”¨æˆ·çº¦å®š yaw:0 æœ +y,CCW ä¸ºæ­£ */
-    float zero_offset_deg_s;   /* é™æ­¢æ ‡å®šå¾—åˆ°çš„é™„åŠ é™€èžºé›¶å */
+    float yaw;                 /* ÓÃ»§Ô¼¶¨ yaw:0 ³¯ +y,CCW ÎªÕý */
+    float zero_offset_deg_s;   /* ¾²Ö¹±ê¶¨µÃµ½µÄ¸½¼ÓÍÓÂÝÁãÆ« */
     bool have_upper;
     uint32_t last_upper_ms;
     uint16_t calib_count;
     float calib_sum;
 
-    /* xy ä¸­å€¼æ»¤æ³¢(å•å¸§è·³å˜å‰”é™¤,é…åˆ 30cm é—¨é™ä½¿ç”¨) */
+    /* xy ÖÐÖµÂË²¨(µ¥Ö¡Ìø±äÌÞ³ý,ÅäºÏ 30cm ÃÅÏÞÊ¹ÓÃ) */
     float median_x[PATH_FUSION_MEDIAN_WIN];
     float median_y[PATH_FUSION_MEDIAN_WIN];
     uint8_t median_i;
@@ -54,7 +54,7 @@ static float median3(const float *buf, uint8_t n)
     b = (n > 1U) ? buf[1] : a;
     c = (n > 2U) ? buf[2] : b;
 
-    /* 3 æ•°æŽ’åºå–ä¸­å€¼ */
+    /* 3 ÊýÅÅÐòÈ¡ÖÐÖµ */
     if (a > b) { tmp = a; a = b; b = tmp; }
     if (b > c) { tmp = b; b = c; c = tmp; }
     if (a > b) { tmp = a; a = b; b = tmp; }
@@ -76,7 +76,7 @@ bool PathFusion_CalibrateSample(float gyro_z_deg_s)
 
     if (fusion.calib_count >= PATH_FUSION_CALIB_SAMPLES)
     {
-        /* é™„åŠ é›¶å = -å‡å€¼(æŠµæ¶ˆ IMU å†…ç½®é›¶åä¿®æ­£åŽçš„æ®‹ä½™è¯¯å·®) */
+        /* ¸½¼ÓÁãÆ« = -¾ùÖµ(µÖÏû IMU ÄÚÖÃÁãÆ«ÐÞÕýºóµÄ²ÐÓàÎó²î) */
         fusion.zero_offset_deg_s =
             -(fusion.calib_sum / (float)fusion.calib_count);
         return true;
@@ -106,8 +106,8 @@ bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     fusion.upper_frames++;
     fusion.last_upper_ms = now_ms;
 
-    /* xy è·³å˜é—¨é™(>30cm æ•´å¸§æ‹’ç»):ç”¨åŽŸå§‹æ ·æœ¬ä¸Žèžåˆå€¼æ¯”è¾ƒ,
-     * é€šè¿‡åŽæ‰è¿›å…¥ä¸­å€¼çª—å£ â€”â€” ç¦»ç¾¤å¸§ä¸ä¼šæ±¡æŸ“çª—å£,ä¸ä¼šé€ æˆå†»ç»“ã€‚ */
+    /* xy Ìø±äÃÅÏÞ(>30cm ÕûÖ¡¾Ü¾ø):ÓÃÔ­Ê¼Ñù±¾ÓëÈÚºÏÖµ±È½Ï,
+     * Í¨¹ýºó²Å½øÈëÖÐÖµ´°¿Ú ¡ª¡ª ÀëÈºÖ¡²»»áÎÛÈ¾´°¿Ú,²»»áÔì³É¶³½á¡£ */
     if (fusion.have_upper)
     {
         dx = x_m - fusion.x;
@@ -119,7 +119,7 @@ bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         }
     }
 
-    /* ä¸­å€¼æ»¤æ³¢:å¸æ”¶ 20cm é‡çº§çš„å•å¸§è·³å˜(æœªè¶… 30cm é—¨é™çš„ç¦»ç¾¤å¸§) */
+    /* ÖÐÖµÂË²¨:ÎüÊÕ 20cm Á¿¼¶µÄµ¥Ö¡Ìø±ä(Î´³¬ 30cm ÃÅÏÞµÄÀëÈºÖ¡) */
     fusion.median_x[fusion.median_i] = x_m;
     fusion.median_y[fusion.median_i] = y_m;
     fusion.median_i = (uint8_t)((fusion.median_i + 1U) %
@@ -131,7 +131,7 @@ bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     med_x = median3(fusion.median_x, fusion.median_fill);
     med_y = median3(fusion.median_y, fusion.median_fill);
 
-    /* yaw é—¨é™(ä¸Žç§¯åˆ†é¢„æµ‹å·® >20Â° æ‹’ç» yaw åˆ†é‡,xy ç…§å¸¸èžåˆ) */
+    /* yaw ÃÅÏÞ(Óë»ý·ÖÔ¤²â²î >20¡ã ¾Ü¾ø yaw ·ÖÁ¿,xy ÕÕ³£ÈÚºÏ) */
     yaw_err_rad = fabsf(PathWrapAngle(yaw_rad - fusion.yaw));
     if (fusion.have_upper &&
         (yaw_err_rad > PATH_FUSION_YAW_GATE_DEG * DEG2RAD))
@@ -140,12 +140,12 @@ bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     }
     else
     {
-        /* yaw ä½Žé€šæ‹‰å›ž */
+        /* yaw µÍÍ¨À­»Ø */
         fusion.yaw += PATH_FUSION_YAW_GAIN *
                       PathWrapAngle(yaw_rad - fusion.yaw);
     }
 
-    /* xy ç›´æŽ¥è¦†ç›– */
+    /* xy Ö±½Ó¸²¸Ç */
     fusion.x = med_x;
     fusion.y = med_y;
     fusion.have_upper = true;
@@ -157,7 +157,7 @@ bool PathFusion_IsUpperLost(uint32_t now_ms)
 {
     if (!fusion.have_upper)
     {
-        /* å°šæœªæ”¶åˆ°è¿‡ä»»ä½•ä¸Šä½æœºæ•°æ®:åœ¨ç­‰å¾…èµ·ç‚¹é˜¶æ®µä¸ç®—ä¸¢å¤± */
+        /* ÉÐÎ´ÊÕµ½¹ýÈÎºÎÉÏÎ»»úÊý¾Ý:ÔÚµÈ´ýÆðµã½×¶Î²»Ëã¶ªÊ§ */
         return false;
     }
     return (uint32_t)(now_ms - fusion.last_upper_ms) >

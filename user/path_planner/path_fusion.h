@@ -1,15 +1,15 @@
 /**
  ******************************************************************************
  * @file    path_fusion.h
- * @brief   IMU é™€èº + ä¸Šä½æœºç»å¯¹ä½å§¿äº’è¡¥èåˆ(å¯¹åº” imu_fusion.py,é EKF)
+ * @brief   IMU ÍÓÂİ + ÉÏÎ»»ú¾ø¶ÔÎ»×Ë»¥²¹ÈÚºÏ(¶ÔÓ¦ imu_fusion.py,·Ç EKF)
  *
- * ä¾èµ–: path_config.h
- * å…³é”®ç®—æ³•:
- *   - predict:yaw ç”± gyro_z é«˜é¢‘ç§¯åˆ†(100Hz æ•°æ®,5ms æ§åˆ¶å‘¨æœŸ);
- *   - update_upper:xy å…ˆè¿‡ 3 ç‚¹ä¸­å€¼æ»¤æ³¢,å†ä¸èåˆå€¼æ¯”è¾ƒ,è·³å˜ >30cm
- *     æ•´å¸§æ‹’ç»;yaw ä¸ç§¯åˆ†é¢„æµ‹å·® >20Â° æ—¶åªæ‹’ç» yaw åˆ†é‡;
- *   - xy ç›´æ¥è¦†ç›–,yaw ç”¨ 0.15 å¢ç›Šä½é€šæ‹‰å›;
- *   - è¶…è¿‡ 500ms æ— ä¸Šä½æœºæ•°æ®åˆ¤å®š lostã€‚
+ * ÒÀÀµ: path_config.h
+ * ¹Ø¼üËã·¨:
+ *   - predict:yaw ÓÉ gyro_z ¸ßÆµ»ı·Ö(100Hz Êı¾İ,5ms ¿ØÖÆÖÜÆÚ);
+ *   - update_upper:xy ÏÈ¹ı 3 µãÖĞÖµÂË²¨,ÔÙÓëÈÚºÏÖµ±È½Ï,Ìø±ä >30cm
+ *     ÕûÖ¡¾Ü¾ø;yaw Óë»ı·ÖÔ¤²â²î >20¡ã Ê±Ö»¾Ü¾ø yaw ·ÖÁ¿;
+ *   - xy Ö±½Ó¸²¸Ç,yaw ÓÃ 0.15 ÔöÒæµÍÍ¨À­»Ø;
+ *   - ³¬¹ı 500ms ÎŞÉÏÎ»»úÊı¾İÅĞ¶¨ lost¡£
  ******************************************************************************
  */
 #ifndef PATH_FUSION_H
@@ -19,46 +19,46 @@
 #include <stdint.h>
 
 /**
- * @brief å¤ä½èåˆå™¨
+ * @brief ¸´Î»ÈÚºÏÆ÷
  */
 void PathFusion_Init(void);
 
 /**
- * @brief é™æ­¢é›¶åæ ‡å®š:é‡‡é›† N å¸§é™€èºæ±‚å‡å€¼,ä½œä¸ºé™„åŠ é›¶å
- * @param gyro_z_deg_s å½“å‰é™€èºè¯»æ•°(deg/s)
- * @retval true æ ‡å®šå®Œæˆ(å·²å¯å¼€å§‹ predict)
+ * @brief ¾²Ö¹ÁãÆ«±ê¶¨:²É¼¯ N Ö¡ÍÓÂİÇó¾ùÖµ,×÷Îª¸½¼ÓÁãÆ«
+ * @param gyro_z_deg_s µ±Ç°ÍÓÂİ¶ÁÊı(deg/s)
+ * @retval true ±ê¶¨Íê³É(ÒÑ¿É¿ªÊ¼ predict)
  */
 bool PathFusion_CalibrateSample(float gyro_z_deg_s);
 
 /**
- * @brief é™€èºç§¯åˆ†é¢„æµ‹ yaw(æ¯æ¬¡æ§åˆ¶å‘¨æœŸè°ƒç”¨)
- * @param gyro_z_deg_s é™€èºè¯»æ•°(deg/s)
- * @param dt_s å‘¨æœŸ(ç§’)
+ * @brief ÍÓÂİ»ı·ÖÔ¤²â yaw(Ã¿´Î¿ØÖÆÖÜÆÚµ÷ÓÃ)
+ * @param gyro_z_deg_s ÍÓÂİ¶ÁÊı(deg/s)
+ * @param dt_s ÖÜÆÚ(Ãë)
  */
 void PathFusion_Predict(float gyro_z_deg_s, float dt_s);
 
 /**
- * @brief èåˆä¸Šä½æœºç»å¯¹ä½å§¿(50Hz å¸§åˆ°è¾¾æ—¶è°ƒç”¨)
- * @param x_m, y_m ä¸Šä½æœºåœºåœ°åæ ‡(m)
- * @param yaw_rad ä¸Šä½æœº yaw(rad,ç”¨æˆ·çº¦å®š:0 æœ +y)
- * @param now_ms  å½“å‰ç³»ç»Ÿæ—¶é—´
- * @retval true æœ¬æ¬¡æ•°æ®é€šè¿‡é—¨é™å¹¶å‚ä¸èåˆ
+ * @brief ÈÚºÏÉÏÎ»»ú¾ø¶ÔÎ»×Ë(50Hz Ö¡µ½´ïÊ±µ÷ÓÃ)
+ * @param x_m, y_m ÉÏÎ»»ú³¡µØ×ø±ê(m)
+ * @param yaw_rad ÉÏÎ»»ú yaw(rad,ÓÃ»§Ô¼¶¨:0 ³¯ +y)
+ * @param now_ms  µ±Ç°ÏµÍ³Ê±¼ä
+ * @retval true ±¾´ÎÊı¾İÍ¨¹ıÃÅÏŞ²¢²ÎÓëÈÚºÏ
  */
 bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
                             uint32_t now_ms);
 
 /**
- * @brief ä¸Šä½æœºæ˜¯å¦ä¸¢å¤±(è¶…è¿‡ PATH_FUSION_UPPER_TIMEOUT_MS æ— æ•°æ®)
+ * @brief ÉÏÎ»»úÊÇ·ñ¶ªÊ§(³¬¹ı PATH_FUSION_UPPER_TIMEOUT_MS ÎŞÊı¾İ)
  */
 bool PathFusion_IsUpperLost(uint32_t now_ms);
 
 /**
- * @brief è¯»å–èåˆä½å§¿
+ * @brief ¶ÁÈ¡ÈÚºÏÎ»×Ë
  */
 void PathFusion_Get(float *x_m, float *y_m, float *yaw_rad);
 
 /**
- * @brief è¯»å–ç»Ÿè®¡:xy/yaw æ‹’ç»æ¬¡æ•°ã€ç´¯è®¡ä¸Šä½æœºå¸§æ•°
+ * @brief ¶ÁÈ¡Í³¼Æ:xy/yaw ¾Ü¾ø´ÎÊı¡¢ÀÛ¼ÆÉÏÎ»»úÖ¡Êı
  */
 void PathFusion_GetStats(uint32_t *xy_rejects, uint32_t *yaw_rejects,
                          uint32_t *upper_frames);

@@ -1,11 +1,11 @@
 /**
  ******************************************************************************
  * @file    path_spline.h
- * @brief   ä¸‰æ¬¡ B æ ·æ¡å¹³æ»‘ + å¼§é•¿/æ›²ç‡ + ç¦»å¢™å¤–æ¨(å¯¹åº” bspline_smoother.py)
+ * @brief   Èı´Î B ÑùÌõÆ½»¬ + »¡³¤/ÇúÂÊ + ÀëÇ½ÍâÍÆ(¶ÔÓ¦ bspline_smoother.py)
  *
- * ä¾èµ–: path_config.h / path_types.h / path_geometry.h
- * å…³é”®ç®—æ³•: clamped å¼¦é•¿å‚æ•°åŒ– B æ ·æ¡(de Boor é€’æ¨),æ’å€¼ç«¯ç‚¹;
- *          æ›²ç‡ = dÎ¸/ds(ä¸­å¿ƒå·®åˆ† + 3 ç‚¹å¹³æ»‘)ã€‚
+ * ÒÀÀµ: path_config.h / path_types.h / path_geometry.h
+ * ¹Ø¼üËã·¨: clamped ÏÒ³¤²ÎÊı»¯ B ÑùÌõ(de Boor µİÍÆ),²åÖµ¶Ëµã;
+ *          ÇúÂÊ = d¦È/ds(ÖĞĞÄ²î·Ö + 3 µãÆ½»¬)¡£
  ******************************************************************************
  */
 #ifndef PATH_SPLINE_H
@@ -15,29 +15,29 @@
 #include "path_types.h"
 
 /**
- * @brief ç”±è·¯ç‚¹ç”Ÿæˆ B æ ·æ¡é‡‡æ ·è½¨è¿¹
- * @param waypoints  è·¯ç‚¹æ•°ç»„(èµ·ç‚¹å·²æŒ‰éœ€è¦è¦†ç›–)
- * @param n_wp       è·¯ç‚¹æ•°(>= 4)
- * @param out        è¾“å‡ºé‡‡æ ·ç‚¹æ•°ç»„(x/y/yaw_tangent/s_m/kappa å¡«å……)
- * @param max_out    è¾“å‡ºæ•°ç»„å®¹é‡(PATH_SPLINE_SAMPLES)
- * @param out_count  å®é™…è¾“å‡ºç‚¹æ•°
- * @retval true æˆåŠŸ
+ * @brief ÓÉÂ·µãÉú³É B ÑùÌõ²ÉÑù¹ì¼£
+ * @param waypoints  Â·µãÊı×é(ÆğµãÒÑ°´ĞèÒª¸²¸Ç)
+ * @param n_wp       Â·µãÊı(>= 4)
+ * @param out        Êä³ö²ÉÑùµãÊı×é(x/y/yaw_tangent/s_m/kappa Ìî³ä)
+ * @param max_out    Êä³öÊı×éÈİÁ¿(PATH_SPLINE_SAMPLES)
+ * @param out_count  Êµ¼ÊÊä³öµãÊı
+ * @retval true ³É¹¦
  */
 bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
                       path_point_t *out, uint16_t max_out,
                       uint16_t *out_count);
 
 /**
- * @brief æŠŠè½å…¥è†¨èƒ€å¢™çš„é‡‡æ ·ç‚¹æ²¿æœ€å°ç©¿é€æ–¹å‘å¤–æ¨(å¯¹åº” push_away_from_walls)
- * @retval æˆåŠŸå¤–æ¨å‡ºå¢™å¤–çš„ç‚¹æ•°
+ * @brief °ÑÂäÈëÅòÕÍÇ½µÄ²ÉÑùµãÑØ×îĞ¡´©Í¸·½ÏòÍâÍÆ(¶ÔÓ¦ push_away_from_walls)
+ * @retval ³É¹¦ÍâÍÆ³öÇ½ÍâµÄµãÊı
  */
 uint16_t PathSpline_PushAwayFromWalls(path_point_t *points, uint16_t count,
                                       const path_gridmap_t *inflated_map);
 
 /**
- * @brief æ¨ç¦» + å¹³æ»‘è¿­ä»£,å¹¶é‡æ–°è®¡ç®—åˆ‡çº¿/å¼§é•¿/æ›²ç‡(å¿…é¡»åœ¨æ¨ç¦»åè°ƒç”¨)
- * @note  å•æ¬¡ç‚¹çŠ¶å¤–æ¨ä¼šæŠŠæ‹è§’æ’•å‡ºè·³å˜,äº¤æ›¿"æ¨ç¦» -> ç§»åŠ¨å¹³å‡"PATH_PUSH_SMOOTH_ROUNDS
- *        è½®,ä½¿è·¯å¾„æ”¶æ•›ä¸ºç»•è†¨èƒ€å¢™çš„åœ†è§’,å†é‡ç®— s/kappa
+ * @brief ÍÆÀë + Æ½»¬µü´ú,²¢ÖØĞÂ¼ÆËãÇĞÏß/»¡³¤/ÇúÂÊ(±ØĞëÔÚÍÆÀëºóµ÷ÓÃ)
+ * @note  µ¥´Îµã×´ÍâÍÆ»á°Ñ¹Õ½ÇËº³öÌø±ä,½»Ìæ"ÍÆÀë -> ÒÆ¶¯Æ½¾ù"PATH_PUSH_SMOOTH_ROUNDS
+ *        ÂÖ,Ê¹Â·¾¶ÊÕÁ²ÎªÈÆÅòÕÍÇ½µÄÔ²½Ç,ÔÙÖØËã s/kappa
  */
 void PathSpline_Finalize(path_point_t *points, uint16_t count,
                          const path_gridmap_t *inflated_map);

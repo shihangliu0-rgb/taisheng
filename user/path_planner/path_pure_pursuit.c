@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_pure_pursuit.c
- * @brief   çº¯è¿½è¸ªå®žçŽ°
+ * @brief   ´¿×·×ÙÊµÏÖ
  ******************************************************************************
  */
 #include "path_pure_pursuit.h"
@@ -21,7 +21,7 @@ void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
                       sqrtf(fabsf(kappa) + 0.05f);
     uint16_t i;
 
-    /* æ€¥å¼¯å¤„ç¼©çŸ­å‰è§†è·ç¦»,æŠ‘åˆ¶æŠ„è¿‘é“ */
+    /* ¼±Íä´¦Ëõ¶ÌÇ°ÊÓ¾àÀë,ÒÖÖÆ³­½üµÀ */
     if (lookahead > kappa_cap)
     {
         lookahead = kappa_cap;
@@ -36,7 +36,7 @@ void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
         i_near = (uint16_t)(count - 1U);
     }
 
-    /* ä»Žæœ€è¿‘ç‚¹èµ·å‘åŽ(è½¨è¿¹æ–¹å‘)æ‰¾ç¬¬ä¸€ä¸ªè·ç¦» >= Ld çš„ç‚¹ */
+    /* ´Ó×î½üµãÆðÏòºó(¹ì¼£·½Ïò)ÕÒµÚÒ»¸ö¾àÀë >= Ld µÄµã */
     for (i = i_near; i < count; i++)
     {
         float dx = points[i].x_m - x;
@@ -51,7 +51,7 @@ void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
         }
     }
 
-    /* å‰©ä½™æ®µä¸è¶³ä¸€ä¸ªå‰è§†è·ç¦»:ç›´æŽ¥å–ç»ˆç‚¹ */
+    /* Ê£Óà¶Î²»×ãÒ»¸öÇ°ÊÓ¾àÀë:Ö±½ÓÈ¡ÖÕµã */
     *i_target = (uint16_t)(count - 1U);
     if (tx != NULL) { *tx = points[count - 1U].x_m; }
     if (ty != NULL) { *ty = points[count - 1U].y_m; }

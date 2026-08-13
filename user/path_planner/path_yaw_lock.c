@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_yaw_lock.c
- * @brief   鑸悜閿佸畾瀹炵幇
+ * @brief   航向锁定实现
  ******************************************************************************
  */
 #include "path_yaw_lock.h"
@@ -21,7 +21,7 @@ float PathYawLock_Step(float yaw_rad, float speed_ms)
     float w_max;
     float w;
 
-    /* 姝诲尯 卤1掳:楂橀�熺洿绾挎椂閬垮厤鎶栧姩 */
+    /* 死区 ±1°:高速直线时避免抖动 */
     if (fabsf(err_deg) <= PATH_YAW_DEADZONE_DEG)
     {
         return 0.0f;
@@ -31,7 +31,7 @@ float PathYawLock_Step(float yaw_rad, float speed_ms)
          PATH_YAW_KP_SMALL : PATH_YAW_KP_LARGE;
     w = kp * err_deg * DEG2RAD;
 
-    /* 閫熷害鑷�傚簲闄愬箙 */
+    /* 速度自适应限幅 */
     w_max = PATH_W_BASE_RAD_S - PATH_W_SLOPE * speed_ms;
     if (w_max < PATH_W_MIN_RAD_S)
     {

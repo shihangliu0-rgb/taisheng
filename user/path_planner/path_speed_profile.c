@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_speed_profile.c
- * @brief   ç¦»çº¿é€Ÿåº¦å‰–é¢ç”Ÿæˆ + æœ€è¿‘ç‚¹æŸ¥è¡¨ + CSV ä¸²å£è¾“å‡º
+ * @brief   ÀëÏßËÙ¶ÈÆÊÃæÉú³É + ×î½üµã²é±í + CSV ´®¿ÚÊä³ö
  ******************************************************************************
  */
 #include "path_speed_profile.h"
@@ -25,7 +25,7 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         return false;
     }
 
-    /* --- 1. æ›²ç‡é™é€Ÿ --- */
+    /* --- 1. ÇúÂÊÏŞËÙ --- */
     for (i = 0U; i < count; i++)
     {
         float k_abs = fabsf(points[i].kappa);
@@ -41,7 +41,7 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         points[i].v_ref = v_limit;
     }
 
-    /* --- 2. å‰å‘æ‰«æ(åŠ é€Ÿèƒ½åŠ›) --- */
+    /* --- 2. Ç°ÏòÉ¨Ãè(¼ÓËÙÄÜÁ¦) --- */
     points[0].v_ref = PATH_V_START_MS;
     for (i = 1U; i < count; i++)
     {
@@ -58,7 +58,7 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* --- 3. åå‘æ‰«æ(åˆ¹è½¦èƒ½åŠ›) --- */
+    /* --- 3. ·´ÏòÉ¨Ãè(É²³µÄÜÁ¦) --- */
     points[count - 1U].v_ref = PATH_V_GOAL_MS;
     for (i = count - 1U; i > 0U; i--)
     {
@@ -75,8 +75,8 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* æœ€ä½å·¡èˆªé€Ÿåº¦(ç»ˆç‚¹é™¤å¤–)ã€‚æ³¨æ„åŒ…å«èµ·ç‚¹:å¦åˆ™ v[0]=0 ä¼šè®©æœºå™¨äºº
-     * åœ¨è½¨è¿¹ç´¢å¼• 0 å¤„æŸ¥è¡¨å¾— 0 é€Ÿåº¦,æ°¸è¿œæ— æ³•èµ·æ­¥(æ­»é”)ã€‚ */
+    /* ×îµÍÑ²º½ËÙ¶È(ÖÕµã³ıÍâ)¡£×¢Òâ°üº¬Æğµã:·ñÔò v[0]=0 »áÈÃ»úÆ÷ÈË
+     * ÔÚ¹ì¼£Ë÷Òı 0 ´¦²é±íµÃ 0 ËÙ¶È,ÓÀÔ¶ÎŞ·¨Æğ²½(ËÀËø)¡£ */
     for (i = 0U; i + 1U < count; i++)
     {
         if (points[i].v_ref < PATH_V_MIN_MS)
@@ -85,10 +85,10 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* --- 4. æœŸæœ›æ¿€å…‰è¡¨(yaw é”å®š 0,è½¦å¤´æœ +y) --- */
+    /* --- 4. ÆÚÍû¼¤¹â±í(yaw Ëø¶¨ 0,³µÍ·³¯ +y) --- */
     for (i = 0U; i < count; i++)
     {
-        /* å‰æ¿€å…‰:æŒ‚ (0.225, 0),æœè½¦ä½“ +x(å‰æ–¹) */
+        /* Ç°¼¤¹â:¹Ò (0.225, 0),³¯³µÌå +x(Ç°·½) */
         PathLaserRay(points[i].x_m, points[i].y_m, PATH_YAW_TARGET_RAD,
                      PATH_LASER_FRONT_X_M, PATH_LASER_FRONT_Y_M,
                      1.0f, 0.0f, &ox, &oy, &dx, &dy);
@@ -96,7 +96,7 @@ bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
                                                           dx, dy,
                                                           PATH_LASER_MAX_RANGE_M);
 
-        /* å·¦æ¿€å…‰:æŒ‚ (0, 0.175),æœè½¦ä½“ +y(æ­£å·¦) */
+        /* ×ó¼¤¹â:¹Ò (0, 0.175),³¯³µÌå +y(Õı×ó) */
         PathLaserRay(points[i].x_m, points[i].y_m, PATH_YAW_TARGET_RAD,
                      PATH_LASER_LEFT_X_M, PATH_LASER_LEFT_Y_M,
                      0.0f, 1.0f, &ox, &oy, &dx, &dy);
@@ -145,7 +145,7 @@ uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t count,
         }
     }
 
-    /* æœ€è¿‘ç‚¹å·²åˆ°çª—å£æœ«å°¾ä¸”å°šæœªåˆ°è½¨è¿¹å°¾,æ•´ä½“å‰ç§»,é¿å…å¡ä½ */
+    /* ×î½üµãÒÑµ½´°¿ÚÄ©Î²ÇÒÉĞÎ´µ½¹ì¼£Î²,ÕûÌåÇ°ÒÆ,±ÜÃâ¿¨×¡ */
     if ((best_i >= end) && (end < count - 1U))
     {
         best_i = end;
@@ -154,14 +154,14 @@ uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t count,
     return best_i;
 }
 
-/* ---------------- CSV è¾“å‡º ---------------- */
+/* ---------------- CSV Êä³ö ---------------- */
 
 static void uart_puts(UART_HandleTypeDef *uart, const char *s)
 {
     (void)HAL_UART_Transmit(uart, (uint8_t *)s, (uint16_t)strlen(s), 10U);
 }
 
-/* æ‰‹å†™æµ®ç‚¹æ ¼å¼åŒ–(2 ä½å°æ•°),ä¸ä¾èµ– printf/snprintf é‡å®šå‘ä¸ microlib è¡Œä¸º */
+/* ÊÖĞ´¸¡µã¸ñÊ½»¯(2 Î»Ğ¡Êı),²»ÒÀÀµ printf/snprintf ÖØ¶¨ÏòÓë microlib ĞĞÎª */
 static void uart_putf(UART_HandleTypeDef *uart, float v)
 {
     char buf[24];
@@ -206,7 +206,7 @@ static void uart_putf(UART_HandleTypeDef *uart, float v)
     uart_puts(uart, buf);
 }
 
-/* æ‰‹å†™ uint è½¬å­—ç¬¦ä¸² */
+/* ÊÖĞ´ uint ×ª×Ö·û´® */
 static void uart_putu(UART_HandleTypeDef *uart, uint16_t v)
 {
     char rev[6];

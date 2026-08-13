@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_spline.c
- * @brief   B æ ·æ¡å®ç°:de Boor é€’æ¨ã€å¯¼æ•°ã€å¼§é•¿ã€æ›²ç‡ã€ç¦»å¢™å¤–æ¨
+ * @brief   B ÑùÌõÊµÏÖ:de Boor µİÍÆ¡¢µ¼Êı¡¢»¡³¤¡¢ÇúÂÊ¡¢ÀëÇ½ÍâÍÆ
  ******************************************************************************
  */
 #include "path_spline.h"
@@ -9,14 +9,14 @@
 #include <math.h>
 #include <stddef.h>
 
-#define MAX_CTRL        (PATH_WAYPOINT_COUNT + 1U)  /* æ§åˆ¶ç‚¹ä¸Šé™ */
+#define MAX_CTRL        (PATH_WAYPOINT_COUNT + 1U)  /* ¿ØÖÆµãÉÏÏŞ */
 #define MAX_KNOTS       (MAX_CTRL + PATH_SPLINE_DEGREE + 1U)
 #define MAX_SAMPLES     PATH_SPLINE_SAMPLES
 
-/* å‰å‘å£°æ˜:Build æœ«å°¾è°ƒç”¨ */
+/* Ç°ÏòÉùÃ÷:Build Ä©Î²µ÷ÓÃ */
 static void update_arc_curvature(path_point_t *points, uint16_t count);
 
-/* de Boor æ±‚å€¼:è¿”å›æ›²çº¿å€¼ out,å¯¼æ•° dout(dout å¯ä¸º NULL) */
+/* de Boor ÇóÖµ:·µ»ØÇúÏßÖµ out,µ¼Êı dout(dout ¿ÉÎª NULL) */
 static void deboor(const float *ctrl_x, const float *ctrl_y,
                    const float *knots, uint8_t n_ctrl, uint8_t degree,
                    float u, float *out_x, float *out_y)
@@ -29,7 +29,7 @@ static void deboor(const float *ctrl_x, const float *ctrl_y,
     float alpha;
     int16_t k_int;
 
-    /* æ‰¾åˆ° span k:u åœ¨ [U_k, U_{k+1}) */
+    /* ÕÒµ½ span k:u ÔÚ [U_k, U_{k+1}) */
     k = degree;
     while ((k + 1U < n_ctrl + degree) && (u >= knots[k + 1U]))
     {
@@ -104,7 +104,7 @@ bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
         return false;
     }
 
-    /* --- 1. å¼¦é•¿å‚æ•°åŒ– --- */
+    /* --- 1. ÏÒ³¤²ÎÊı»¯ --- */
     chord[0] = 0.0f;
     for (i = 0U; i < n; i++)
     {
@@ -127,7 +127,7 @@ bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
         chord[i] /= total;
     }
 
-    /* --- 2. clamped å¼¦é•¿å¹³å‡ knot vector ---
+    /* --- 2. clamped ÏÒ³¤Æ½¾ù knot vector ---
      * U[0..p]=0,U[p+j]=chord[j](j=1..n-p-1),U[n..n+p]=1 */
     for (i = 0U; i <= p; i++)
     {
@@ -142,7 +142,7 @@ bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
         knots[i] = 1.0f;
     }
 
-    /* --- 3. é‡‡æ ·å¹¶è®¡ç®—åˆ‡çº¿ --- */
+    /* --- 3. ²ÉÑù²¢¼ÆËãÇĞÏß --- */
     count = (max_out < MAX_SAMPLES) ? max_out : MAX_SAMPLES;
     for (sample = 0U; sample < count; sample++)
     {
@@ -151,7 +151,7 @@ bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
 
         deboor(ctrl_x, ctrl_y, knots, n, p, u, &px, &py);
 
-        /* åˆ‡çº¿:ç”¨å‰åé‡‡æ ·ç‚¹ä¸­å¿ƒå·®åˆ†(æœ€åä¸€ä¸ªç‚¹ä¸è‡ªèº«å·®åˆ†) */
+        /* ÇĞÏß:ÓÃÇ°ºó²ÉÑùµãÖĞĞÄ²î·Ö(×îºóÒ»¸öµãÓë×ÔÉí²î·Ö) */
         u += 1e-4f;
         if (u > 1.0f)
         {
@@ -186,14 +186,14 @@ bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
     return true;
 }
 
-/* ---------------- å¼§é•¿/æ›²ç‡(æ¨ç¦»æˆ–å¹³æ»‘åéœ€é‡ç®—) ---------------- */
+/* ---------------- »¡³¤/ÇúÂÊ(ÍÆÀë»òÆ½»¬ºóĞèÖØËã) ---------------- */
 static void update_arc_curvature(path_point_t *points, uint16_t count)
 {
     uint16_t sample;
     float ds;
     float dtheta;
 
-    /* åˆ‡çº¿:ä¸­å¿ƒå·®åˆ†(ç«¯ç‚¹ç”¨ç›¸é‚»ä¸¤ç‚¹æ–¹å‘) */
+    /* ÇĞÏß:ÖĞĞÄ²î·Ö(¶ËµãÓÃÏàÁÚÁ½µã·½Ïò) */
     for (sample = 1U; sample < count - 1U; sample++)
     {
         float tx = points[sample + 1U].x_m - points[sample - 1U].x_m;
@@ -206,7 +206,7 @@ static void update_arc_curvature(path_point_t *points, uint16_t count)
         atan2f(points[count - 1U].y_m - points[count - 2U].y_m,
                points[count - 1U].x_m - points[count - 2U].x_m);
 
-    /* å¼§é•¿ */
+    /* »¡³¤ */
     points[0].s_m = 0.0f;
     for (sample = 1U; sample < count; sample++)
     {
@@ -216,7 +216,7 @@ static void update_arc_curvature(path_point_t *points, uint16_t count)
                              sqrtf(dx * dx + dy * dy);
     }
 
-    /* æ›²ç‡ Îº = dÎ¸/ds(ä¸­å¿ƒå·®åˆ† + 2 é 3 ç‚¹å¹³æ»‘) */
+    /* ÇúÂÊ ¦Ê = d¦È/ds(ÖĞĞÄ²î·Ö + 2 ±é 3 µãÆ½»¬) */
     for (sample = 1U; sample < count - 1U; sample++)
     {
         ds = points[sample + 1U].s_m - points[sample - 1U].s_m;
@@ -249,7 +249,7 @@ static void update_arc_curvature(path_point_t *points, uint16_t count)
     }
 }
 
-/* ---------------- å¹³æ»‘ä¸æœ€ç»ˆåŒ– ---------------- */
+/* ---------------- Æ½»¬Óë×îÖÕ»¯ ---------------- */
 static void smooth_xy(path_point_t *points, uint16_t count, uint8_t window)
 {
     uint16_t sample;
@@ -293,11 +293,11 @@ static void smooth_xy(path_point_t *points, uint16_t count, uint8_t window)
     }
 }
 
-/* æ›²ç‡æ•´å½¢:æŠŠæ›²ç‡è¶…é™(è½¬å¼¯åŠå¾„è¿‡å°)çš„ç‚¹æ²¿å¼¯é“å¤–ä¾§æ¨å¼€ã€‚
- * è¯´æ˜:æœ¬åœºåœ°çš„ä¸¤ä¸ªå…³é”®æ‹è§’(D è§’ä¸ wall_C è¥¿ä¾§æ‹è§’)å¢™è§’éƒ½åœ¨å¼¯é“
- * å†…ä¾§,å†…åˆ‡åœ†å¼§ä¼šæ“¦å¢™(ç¦»å¢™è§’ 0.2~0.34m < è½¦è§’åŠå¾„ 0.379m),
- * å¿…é¡»ä½¿ç”¨"å¤–ä¾§ç»•è¡Œ"çš„å¼§çº¿ â€”â€” å³æŠŠè½¬å¼¯ç‚¹å‘å¼¯é“å¤–ä¾§æ¨,è®©è·¯å¾„
- * å…ˆè¿œç¦»å¢™å†è½¬å¼¯ã€‚é€ç‚¹å¤–æ¨ + å¹³æ»‘äº¤æ›¿è¿­ä»£å³å¯æ”¶æ•›æˆè¿™ç§å½¢çŠ¶ã€‚ */
+/* ÇúÂÊÕûĞÎ:°ÑÇúÂÊ³¬ÏŞ(×ªÍä°ë¾¶¹ıĞ¡)µÄµãÑØÍäµÀÍâ²àÍÆ¿ª¡£
+ * ËµÃ÷:±¾³¡µØµÄÁ½¸ö¹Ø¼ü¹Õ½Ç(D ½ÇÓë wall_C Î÷²à¹Õ½Ç)Ç½½Ç¶¼ÔÚÍäµÀ
+ * ÄÚ²à,ÄÚÇĞÔ²»¡»á²ÁÇ½(ÀëÇ½½Ç 0.2~0.34m < ³µ½Ç°ë¾¶ 0.379m),
+ * ±ØĞëÊ¹ÓÃ"Íâ²àÈÆĞĞ"µÄ»¡Ïß ¡ª¡ª ¼´°Ñ×ªÍäµãÏòÍäµÀÍâ²àÍÆ,ÈÃÂ·¾¶
+ * ÏÈÔ¶ÀëÇ½ÔÙ×ªÍä¡£ÖğµãÍâÍÆ + Æ½»¬½»Ìæµü´ú¼´¿ÉÊÕÁ²³ÉÕâÖÖĞÎ×´¡£ */
 static void limit_curvature(path_point_t *points, uint16_t count,
                             float min_radius)
 {
@@ -324,9 +324,9 @@ static void limit_curvature(path_point_t *points, uint16_t count,
         }
 
         th = points[s].yaw_tangent;
-        nx = -sinf(th);   /* åˆ‡å‘çš„å·¦æ³•å‘ */
+        nx = -sinf(th);   /* ÇĞÏòµÄ×ó·¨Ïò */
         ny = cosf(th);
-        /* Îº>0(å·¦è½¬)æ›²ç‡ä¸­å¿ƒåœ¨å·¦ä¾§ -> å‘å³å¤–æ¨;Îº<0 åä¹‹ */
+        /* ¦Ê>0(×ó×ª)ÇúÂÊÖĞĞÄÔÚ×ó²à -> ÏòÓÒÍâÍÆ;¦Ê<0 ·´Ö® */
         dir = (k > 0.0f) ? -1.0f : 1.0f;
         points[s].x_m += dir * nx * PATH_PUSH_STEP_M;
         points[s].y_m += dir * ny * PATH_PUSH_STEP_M;
@@ -343,16 +343,16 @@ void PathSpline_Finalize(path_point_t *points, uint16_t count,
         return;
     }
 
-    /* äº¤æ›¿æ¨ç¦» + å¹³æ»‘:æ”¶æ•›ä¸ºç»•è†¨èƒ€å¢™çš„è¿ç»­åœ†è§’ */
+    /* ½»ÌæÍÆÀë + Æ½»¬:ÊÕÁ²ÎªÈÆÅòÕÍÇ½µÄÁ¬ĞøÔ²½Ç */
     for (round = 0U; round < PATH_PUSH_SMOOTH_ROUNDS; round++)
     {
         (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
         smooth_xy(points, count, PATH_SMOOTH_WINDOW);
     }
-    /* æœ€åä¸€è½®åªæ¨ç¦»(å¹³æ»‘å¯èƒ½æŠŠç‚¹å¸¦å›å¢™å†…) */
+    /* ×îºóÒ»ÂÖÖ»ÍÆÀë(Æ½»¬¿ÉÄÜ°Ñµã´ø»ØÇ½ÄÚ) */
     (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
 
-    /* æ›²ç‡æ•´å½¢:æœ€å°è½¬å¼¯åŠå¾„çº¦æŸ(å¤–ä¾§ç»•è¡Œ) */
+    /* ÇúÂÊÕûĞÎ:×îĞ¡×ªÍä°ë¾¶Ô¼Êø(Íâ²àÈÆĞĞ) */
     for (round = 0U; round < PATH_CURV_LIMIT_ITERS; round++)
     {
         update_arc_curvature(points, count);

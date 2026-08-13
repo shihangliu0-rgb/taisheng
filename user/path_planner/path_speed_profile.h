@@ -1,14 +1,14 @@
 /**
  ******************************************************************************
  * @file    path_speed_profile.h
- * @brief   ç¦»çº¿é€Ÿåº¦å‰–é¢:æ›²ç‡é™é€Ÿ + åŒå‘æ‰«æ,åŠæœŸæœ›æ¿€å…‰æŸ¥è¡¨(å¯¹åº” speed_profile.py)
+ * @brief   ÀëÏßËÙ¶ÈÆÊÃæ:ÇúÂÊÏŞËÙ + Ë«ÏòÉ¨Ãè,¼°ÆÚÍû¼¤¹â²é±í(¶ÔÓ¦ speed_profile.py)
  *
- * ä¾èµ–: path_config.h / path_types.h / path_geometry.h / math.h
- * å…³é”®ç®—æ³•:
- *   1. æ›²ç‡é™é€Ÿ v <= sqrt(a_lat / |kappa|),ä¸ v_max å–å°;
- *   2. å‰å‘æ‰«æ(åŠ é€Ÿèƒ½åŠ›)  v_{i+1}^2 <= v_i^2 + 2*a_accel*ds;
- *   3. åå‘æ‰«æ(åˆ¹è½¦èƒ½åŠ›)  v_i^2 <= v_{i+1}^2 + 2*a_brake*ds;
- *   4. æ¯ç‚¹åšå‰/å·¦æ¿€å…‰æœŸæœ›è·ç¦»å°„çº¿æŠ•å°„(yaw é”å®š 0,è½¦å¤´æœ +y)ã€‚
+ * ÒÀÀµ: path_config.h / path_types.h / path_geometry.h / math.h
+ * ¹Ø¼üËã·¨:
+ *   1. ÇúÂÊÏŞËÙ v <= sqrt(a_lat / |kappa|),Óë v_max È¡Ğ¡;
+ *   2. Ç°ÏòÉ¨Ãè(¼ÓËÙÄÜÁ¦)  v_{i+1}^2 <= v_i^2 + 2*a_accel*ds;
+ *   3. ·´ÏòÉ¨Ãè(É²³µÄÜÁ¦)  v_i^2 <= v_{i+1}^2 + 2*a_brake*ds;
+ *   4. Ã¿µã×öÇ°/×ó¼¤¹âÆÚÍû¾àÀëÉäÏßÍ¶Éä(yaw Ëø¶¨ 0,³µÍ·³¯ +y)¡£
  ******************************************************************************
  */
 #ifndef PATH_SPEED_PROFILE_H
@@ -19,26 +19,26 @@
 #include "stm32h7xx_hal.h"
 
 /**
- * @brief ä¸ºé‡‡æ ·è½¨è¿¹ç”Ÿæˆé€Ÿåº¦å‰–é¢ä¸æœŸæœ›æ¿€å…‰è¡¨
- * @param points       B æ ·æ¡é‡‡æ ·ç‚¹(è¾“å…¥ x/y,è¾“å‡º v_ref/exp_laser_*)
- * @param count        ç‚¹æ•°
- * @param real_map     çœŸå®å¢™åœ°å›¾(ç®—æœŸæœ›æ¿€å…‰)
- * @retval true æˆåŠŸ
+ * @brief Îª²ÉÑù¹ì¼£Éú³ÉËÙ¶ÈÆÊÃæÓëÆÚÍû¼¤¹â±í
+ * @param points       B ÑùÌõ²ÉÑùµã(ÊäÈë x/y,Êä³ö v_ref/exp_laser_*)
+ * @param count        µãÊı
+ * @param real_map     ÕæÊµÇ½µØÍ¼(ËãÆÚÍû¼¤¹â)
+ * @retval true ³É¹¦
  */
 bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
                             const path_gridmap_t *real_map);
 
 /**
- * @brief å‰å‘çª—å£æœç´¢ç¦» (x,y) æœ€è¿‘çš„è½¨è¿¹ç‚¹ç´¢å¼•
- * @param hint ä¸Šæ¬¡ç´¢å¼•,ä»æ­¤å¤„èµ·åªå‘å‰æœç´¢(é˜²æ­¢èµ°å›å¤´)
- * @retval æœ€è¿‘ç‚¹ç´¢å¼•
+ * @brief Ç°Ïò´°¿ÚËÑË÷Àë (x,y) ×î½üµÄ¹ì¼£µãË÷Òı
+ * @param hint ÉÏ´ÎË÷Òı,´Ó´Ë´¦ÆğÖ»ÏòÇ°ËÑË÷(·ÀÖ¹×ß»ØÍ·)
+ * @retval ×î½üµãË÷Òı
  */
 uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t count,
                                   float x, float y, uint16_t hint);
 
 /**
- * @brief é€šè¿‡ä¸²å£è¾“å‡º CSV(è¡¨å¤´ + æ¯è¡Œ s,x,y,kappa,v_ref,exp_f,exp_l),
- *        å¯åœ¨ä¸»æœºä¾§ä¿å­˜ä¸º speed_profile.csv / expected_laser.csv äººå·¥æ£€æŸ¥
+ * @brief Í¨¹ı´®¿ÚÊä³ö CSV(±íÍ· + Ã¿ĞĞ s,x,y,kappa,v_ref,exp_f,exp_l),
+ *        ¿ÉÔÚÖ÷»ú²à±£´æÎª speed_profile.csv / expected_laser.csv ÈË¹¤¼ì²é
  */
 void PathSpeedProfile_DumpCsv(const path_point_t *points, uint16_t count,
                               UART_HandleTypeDef *uart);

@@ -1,11 +1,11 @@
 /**
  ******************************************************************************
  * @file    path_pure_pursuit.h
- * @brief   çº¯è¿½è¸ªå‰è§†ç›®æ ‡(å¯¹åº” pure_pursuit.py)
+ * @brief   ´¿×·×ÙÇ°ÊÓÄ¿±ê(¶ÔÓ¦ pure_pursuit.py)
  *
- * ä¾èµ–: path_config.h / path_types.h
- * å…³é”®ç®—æ³•: Ld = lookahead_min + lookahead_k * v_ref è‡ªé€‚åº”å‰è§†;
- *           ä»æœ€è¿‘ç‚¹èµ·æ²¿è½¨è¿¹æ–¹å‘æ‰¾ç¬¬ä¸€ä¸ªè·æœºå™¨äºº >= Ld çš„ç‚¹ã€‚
+ * ÒÀÀµ: path_config.h / path_types.h
+ * ¹Ø¼üËã·¨: Ld = lookahead_min + lookahead_k * v_ref ×ÔÊÊÓ¦Ç°ÊÓ;
+ *           ´Ó×î½üµãÆğÑØ¹ì¼£·½ÏòÕÒµÚÒ»¸ö¾à»úÆ÷ÈË >= Ld µÄµã¡£
  ******************************************************************************
  */
 #ifndef PATH_PURE_PURSUIT_H
@@ -14,15 +14,15 @@
 #include "path_types.h"
 
 /**
- * @brief åœ¨è½¨è¿¹ä¸Šå¯»æ‰¾å‰è§†ç›®æ ‡ç‚¹
- * @param points    å‚è€ƒè½¨è¿¹
- * @param count     è½¨è¿¹ç‚¹æ•°
- * @param x, y      å½“å‰ä½å§¿(èåˆ)
- * @param v_ref     å½“å‰é€Ÿåº¦å‚è€ƒ(m/s),å†³å®šå‰è§†è·ç¦»
- * @param kappa     æœ€è¿‘ç‚¹æ›²ç‡(1/m):æ€¥å¼¯å¤„ç¼©çŸ­å‰è§†,é˜²æ­¢æŠ„è¿‘é“
- * @param i_near    æœ€è¿‘ç‚¹ç´¢å¼•(ç”± PathSpeedProfile_Nearest å¾—åˆ°)
- * @param i_target  è¾“å‡º:ç›®æ ‡ç‚¹ç´¢å¼•
- * @param tx, ty    è¾“å‡º:ç›®æ ‡ç‚¹åæ ‡
+ * @brief ÔÚ¹ì¼£ÉÏÑ°ÕÒÇ°ÊÓÄ¿±êµã
+ * @param points    ²Î¿¼¹ì¼£
+ * @param count     ¹ì¼£µãÊı
+ * @param x, y      µ±Ç°Î»×Ë(ÈÚºÏ)
+ * @param v_ref     µ±Ç°ËÙ¶È²Î¿¼(m/s),¾ö¶¨Ç°ÊÓ¾àÀë
+ * @param kappa     ×î½üµãÇúÂÊ(1/m):¼±Íä´¦Ëõ¶ÌÇ°ÊÓ,·ÀÖ¹³­½üµÀ
+ * @param i_near    ×î½üµãË÷Òı(ÓÉ PathSpeedProfile_Nearest µÃµ½)
+ * @param i_target  Êä³ö:Ä¿±êµãË÷Òı
+ * @param tx, ty    Êä³ö:Ä¿±êµã×ø±ê
  */
 void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
                           float x, float y, float v_ref, float kappa,

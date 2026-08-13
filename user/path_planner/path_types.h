@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_types.h
- * @brief   è·¯å¾„è§„åˆ’ä¸æ§åˆ¶æ¨¡å—å…¬å…±ç±»å‹å®šä¹‰
+ * @brief   Â·¾¶¹æ»®Óë¿ØÖÆÄ£¿é¹«¹²ÀàĞÍ¶¨Òå
  ******************************************************************************
  */
 #ifndef PATH_TYPES_H
@@ -9,80 +9,80 @@
 
 #include <stdint.h>
 
-/* è½¨è¿¹ç‚¹:ç¦»çº¿ç”Ÿæˆçš„æ•´æ¡å‚è€ƒè½¨è¿¹ä¸Šçš„ä¸€ä¸ªé‡‡æ ·ç‚¹ */
+/* ¹ì¼£µã:ÀëÏßÉú³ÉµÄÕûÌõ²Î¿¼¹ì¼£ÉÏµÄÒ»¸ö²ÉÑùµã */
 typedef struct
 {
-    float x_m;               /* ä¸–ç•Œç³» X */
-    float y_m;               /* ä¸–ç•Œç³» Y */
-    float yaw_tangent;       /* åˆ‡å‘è§’(rad,ä¸–ç•Œç³») */
-    float s_m;               /* å¼§é•¿(m) */
-    float kappa;             /* æ›²ç‡(1/m,å¹³æ»‘å) */
-    float v_ref;             /* ç¦»çº¿é€Ÿåº¦å‰–é¢å‚è€ƒ(m/s) */
-    float exp_laser_front_m; /* è¯¥ç‚¹å‰æ–¹æ¿€å…‰æœŸæœ›è·ç¦»(m) */
-    float exp_laser_left_m;  /* è¯¥ç‚¹å·¦æ–¹æ¿€å…‰æœŸæœ›è·ç¦»(m) */
+    float x_m;               /* ÊÀ½çÏµ X */
+    float y_m;               /* ÊÀ½çÏµ Y */
+    float yaw_tangent;       /* ÇĞÏò½Ç(rad,ÊÀ½çÏµ) */
+    float s_m;               /* »¡³¤(m) */
+    float kappa;             /* ÇúÂÊ(1/m,Æ½»¬ºó) */
+    float v_ref;             /* ÀëÏßËÙ¶ÈÆÊÃæ²Î¿¼(m/s) */
+    float exp_laser_front_m; /* ¸ÃµãÇ°·½¼¤¹âÆÚÍû¾àÀë(m) */
+    float exp_laser_left_m;  /* ¸Ãµã×ó·½¼¤¹âÆÚÍû¾àÀë(m) */
 } path_point_t;
 
-/* è·¯ç‚¹(ä¸–ç•Œç³») */
+/* Â·µã(ÊÀ½çÏµ) */
 typedef struct
 {
     float x_m;
     float y_m;
 } path_waypoint_t;
 
-/* è¿è¡ŒåŸå› (è°ƒè¯•/æ—¥å¿—ç”¨) */
+/* ÔËĞĞÔ­Òò(µ÷ÊÔ/ÈÕÖ¾ÓÃ) */
 typedef enum
 {
     PATH_REASON_BOOT = 0,
     PATH_REASON_CALIB,
     PATH_REASON_WAIT_START,
     PATH_REASON_RUN,
-    PATH_REASON_LASER_SLOW,        /* å‰æ¿€å…‰å…œåº•é™é€Ÿ */
+    PATH_REASON_LASER_SLOW,        /* Ç°¼¤¹â¶µµ×½µËÙ */
     PATH_REASON_ARRIVED,
-    PATH_REASON_STOP_LASER_FRONT,  /* å‰æ¿€å…‰ < 12cm å¼ºåˆ¶åœ */
-    PATH_REASON_STOP_UPPER_LOST,   /* ä¸Šä½æœºä½å§¿ä¸¢å¤± > 500ms */
-    PATH_REASON_STOP_IMU_LOST,     /* IMU ç¦»çº¿ */
-    PATH_REASON_STOP_LASER_LOST,   /* å‰æ¿€å…‰ç¦»çº¿ */
-    PATH_REASON_STOP_BUILD,        /* ç¦»çº¿è½¨è¿¹ç”Ÿæˆå¤±è´¥ */
-    PATH_REASON_STOP_NUMERIC,      /* æ•°å€¼å¼‚å¸¸(NaN/Inf)é˜²æŠ¤åœè½¦ */
-    PATH_REASON_STOP_TIMEOUT       /* å…¨ç¨‹è¶…æ—¶ */
+    PATH_REASON_STOP_LASER_FRONT,  /* Ç°¼¤¹â < 12cm Ç¿ÖÆÍ£ */
+    PATH_REASON_STOP_UPPER_LOST,   /* ÉÏÎ»»úÎ»×Ë¶ªÊ§ > 500ms */
+    PATH_REASON_STOP_IMU_LOST,     /* IMU ÀëÏß */
+    PATH_REASON_STOP_LASER_LOST,   /* Ç°¼¤¹âÀëÏß */
+    PATH_REASON_STOP_BUILD,        /* ÀëÏß¹ì¼£Éú³ÉÊ§°Ü */
+    PATH_REASON_STOP_NUMERIC,      /* ÊıÖµÒì³£(NaN/Inf)·À»¤Í£³µ */
+    PATH_REASON_STOP_TIMEOUT       /* È«³Ì³¬Ê± */
 } path_reason_t;
 
-/* è§„åˆ’å™¨è¿è¡ŒçŠ¶æ€æœº */
+/* ¹æ»®Æ÷ÔËĞĞ×´Ì¬»ú */
 typedef enum
 {
-    PATH_STATE_INIT = 0,      /* ä¸Šç”µ,å…³é—­ IMU è‡ªå¸¦èˆªå‘ä¿æŒç­‰ */
-    PATH_STATE_CALIB,         /* é™æ­¢é‡‡é›†é™€èºé›¶å */
-    PATH_STATE_WAIT_START,    /* ç­‰å¾…ä¸Šä½æœºä½å§¿ç¡®å®šèµ·ç‚¹ */
-    PATH_STATE_BUILD,         /* ç¦»çº¿ç”Ÿæˆ B æ ·æ¡ + é€Ÿåº¦å‰–é¢ */
-    PATH_STATE_RUN,           /* åœ¨çº¿è·Ÿè¸ª */
-    PATH_STATE_ARRIVED,       /* åˆ°è¾¾ç»ˆç‚¹ */
-    PATH_STATE_STOPPED        /* æ•…éšœåœæ­¢ */
+    PATH_STATE_INIT = 0,      /* ÉÏµç,¹Ø±Õ IMU ×Ô´øº½Ïò±£³ÖµÈ */
+    PATH_STATE_CALIB,         /* ¾²Ö¹²É¼¯ÍÓÂİÁãÆ« */
+    PATH_STATE_WAIT_START,    /* µÈ´ıÉÏÎ»»úÎ»×ËÈ·¶¨Æğµã */
+    PATH_STATE_BUILD,         /* ÀëÏßÉú³É B ÑùÌõ + ËÙ¶ÈÆÊÃæ */
+    PATH_STATE_RUN,           /* ÔÚÏß¸ú×Ù */
+    PATH_STATE_ARRIVED,       /* µ½´ïÖÕµã */
+    PATH_STATE_STOPPED        /* ¹ÊÕÏÍ£Ö¹ */
 } path_state_t;
 
-/* è°ƒè¯•ä¿¡æ¯(400ms ä¸€åˆ·,çœŸè½¦å¯é€‰ä¸²å£æ‰“å°) */
+/* µ÷ÊÔĞÅÏ¢(400ms Ò»Ë¢,Õæ³µ¿ÉÑ¡´®¿Ú´òÓ¡) */
 typedef struct
 {
     path_state_t state;
     path_reason_t reason;
     uint16_t i_near;
     uint16_t i_target;
-    float v_ref;              /* æŸ¥è¡¨é€Ÿåº¦(m/s) */
-    float v_used;             /* å®é™…ä½¿ç”¨é€Ÿåº¦(m/s) */
+    float v_ref;              /* ²é±íËÙ¶È(m/s) */
+    float v_used;             /* Êµ¼ÊÊ¹ÓÃËÙ¶È(m/s) */
     float laser_f_m;
     float laser_l_m;
     float exp_laser_l_m;
     float fused_x;
     float fused_y;
     float fused_yaw_rad;
-    float cmd_vx_ch;          /* åº•ç›˜ç³» x(å‘å³,m/s) */
-    float cmd_vy_ch;          /* åº•ç›˜ç³» y(å‘å‰,m/s) */
-    float cmd_w;              /* æ—‹è½¬(rad/s) */
+    float cmd_vx_ch;          /* µ×ÅÌÏµ x(ÏòÓÒ,m/s) */
+    float cmd_vy_ch;          /* µ×ÅÌÏµ y(ÏòÇ°,m/s) */
+    float cmd_w;              /* Ğı×ª(rad/s) */
     uint32_t fusion_xy_rejects;
     uint32_t fusion_yaw_rejects;
-    uint32_t upper_frames;    /* å‚ä¸èåˆçš„ä¸Šä½æœºå¸§æ•° */
-    uint32_t pc_frames;       /* pc_link æ”¶åˆ°çš„å¥½å¸§æ•° */
-    uint32_t crc_errors;      /* pc_link æ ¡éªŒé”™è¯¯æ•° */
-    uint32_t run_ms;          /* è¿è¡Œé˜¶æ®µç´¯è®¡æ—¶é—´ */
+    uint32_t upper_frames;    /* ²ÎÓëÈÚºÏµÄÉÏÎ»»úÖ¡Êı */
+    uint32_t pc_frames;       /* pc_link ÊÕµ½µÄºÃÖ¡Êı */
+    uint32_t crc_errors;      /* pc_link Ğ£Ñé´íÎóÊı */
+    uint32_t run_ms;          /* ÔËĞĞ½×¶ÎÀÛ¼ÆÊ±¼ä */
 } path_debug_t;
 
 #endif /* PATH_TYPES_H */

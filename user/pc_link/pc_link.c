@@ -1,57 +1,57 @@
 /**
  ******************************************************************************
  * @file    pc_link.c
- * @brief   小电脑(ROS2 competition_gateway)串口对接 —— 协议实现
+ * @brief   С����(ROS2 competition_gateway)���ڶԽ� ���� Э��ʵ��
  *
- * 实现要点(遵循上位机 docs/串口通信协议.md 中"STM32 实现要求"):
- *   1. 使用环形缓冲区接收字节流,逐字节查找帧头,不假设一次 UART 中断
- *      恰好收到一帧;
- *   2. 先校验帧头、帧类型、帧尾与校验和,全部通过后才使用有效载荷;
- *   3. 无效标志位对应的数据一律清零,不沿用上一次的有效数据;
- *   4. 数据超时只清除本模块的有效位,不干预底盘 / 抬升等核心闭环。
+ * ʵ��Ҫ��(��ѭ��λ�� docs/����ͨ��Э��.md ��"STM32 ʵ��Ҫ��"):
+ *   1. ʹ�û��λ����������ֽ���,���ֽڲ���֡ͷ,������һ�� UART �ж�
+ *      ǡ���յ�һ֡;
+ *   2. ��У��֡ͷ��֡���͡�֡β��У���,ȫ��ͨ�����ʹ����Ч�غ�;
+ *   3. ��Ч��־λ��Ӧ������һ������,��������һ�ε���Ч����;
+ *   4. ���ݳ�ʱֻ�����ģ�����Чλ,����Ԥ���� / ̧���Ⱥ��ıջ���
  *
- * 本文件只依赖配置宏与 HAL,不修改任何其他模块。
+ * ���ļ�ֻ�������ú��� HAL,���޸��κ�����ģ�顣
  ******************************************************************************
  */
 #include "pc_link.h"
 
 #if PC_LINK_ENABLE
 
-#include "usart.h"   /* huart7 / huart8 等句柄的外部声明 */
+#include "usart.h"   /* huart7 / huart8 �Ⱦ�����ⲿ���� */
 
 #include <stddef.h>
 #include <string.h>
 
-/* 接收状态机 */
+/* ����״̬�� */
 typedef enum
 {
-    PC_RX_WAIT_HEADER_0,   /* 等待 AA */
-    PC_RX_WAIT_HEADER_1,   /* 已收 AA,等待 55 */
-    PC_RX_WAIT_TYPE,       /* 已收 AA 55,等待帧类型 */
-    PC_RX_COLLECT          /* 收集剩余字节直至整帧 */
+    PC_RX_WAIT_HEADER_0,   /* �ȴ� AA */
+    PC_RX_WAIT_HEADER_1,   /* ���� AA,�ȴ� 55 */
+    PC_RX_WAIT_TYPE,       /* ���� AA 55,�ȴ�֡���� */
+    PC_RX_COLLECT          /* �ռ�ʣ���ֽ�ֱ����֡ */
 } pc_rx_state_t;
 
 static UART_HandleTypeDef *pc_uart;
 
-static uint8_t rx_byte;                                     /* 单字节中断接收缓冲 */
-static uint8_t rx_ring[PC_LINK_RX_BUFFER_SIZE];             /* 环形缓冲区 */
-static volatile uint16_t rx_ring_head;                      /* ISR 写入 */
-static uint16_t rx_ring_tail;                               /* 任务读取 */
+static uint8_t rx_byte;                                     /* ���ֽ��жϽ��ջ��� */
+static uint8_t rx_ring[PC_LINK_RX_BUFFER_SIZE];             /* ���λ����� */
+static volatile uint16_t rx_ring_head;                      /* ISR д�� */
+static uint16_t rx_ring_tail;                               /* �����ȡ */
 
-static volatile uint32_t rx_frame_count;                    /* 通过校验的好帧数 */
-static volatile uint32_t rx_position_frame_count;           /* 通过校验的 0x11 位置帧数 */
-static volatile uint32_t crc_error_count;                   /* 帧尾/校验和错误帧数 */
+static volatile uint32_t rx_frame_count;                    /* ͨ��У��ĺ�֡�� */
+static volatile uint32_t rx_position_frame_count;           /* ͨ��У��� 0x11 λ��֡�� */
+static volatile uint32_t crc_error_count;                   /* ֡β/У��ʹ���֡�� */
 
 static pc_rx_state_t rx_state;
-static uint8_t rx_frame[PC_LINK_PERCEPTION_FRAME_SIZE];     /* 最长帧 44B,兼容 24B */
+static uint8_t rx_frame[PC_LINK_PERCEPTION_FRAME_SIZE];     /* �֡ 44B,���� 24B */
 static uint8_t rx_index;
-static uint8_t rx_expect;                                   /* 当前帧期望总长 */
+static uint8_t rx_expect;                                   /* ��ǰ֡�����ܳ� */
 
 static pc_perception_t perception;
 static pc_position_t position;
 
-static volatile uint8_t status_state;                       /* 回传状态机的状态 */
-static volatile uint8_t status_error;                       /* 回传板端错误码 */
+static volatile uint8_t status_state;                       /* �ش�״̬����״̬ */
+static volatile uint8_t status_error;                       /* �ش���˴����� */
 static volatile uint32_t last_perception_ms;
 static volatile uint32_t last_position_ms;
 static uint32_t last_status_ms;
@@ -59,11 +59,11 @@ static uint32_t last_status_ms;
 static volatile bool restart_requested;
 
 /* ----------------------------------------------------------------------------
- * 工具函数
+ * ���ߺ���
  * --------------------------------------------------------------------------*/
 
 /**
- * @brief 从字节流读取 IEEE754 单精度浮点数(小端,与上位机 memcpy 编码一致)
+ * @brief ���ֽ�����ȡ IEEE754 �����ȸ�����(С��,����λ�� memcpy ����һ��)
  */
 static float read_le_float(const uint8_t *data)
 {
@@ -74,7 +74,7 @@ static float read_le_float(const uint8_t *data)
 }
 
 /**
- * @brief 8 位累加校验和(与上位机 SerialProtocol_Checksum 一致)
+ * @brief 8 λ�ۼ�У���(����λ�� SerialProtocol_Checksum һ��)
  */
 static uint8_t checksum8(const uint8_t *data, uint8_t length)
 {
@@ -90,8 +90,8 @@ static uint8_t checksum8(const uint8_t *data, uint8_t length)
 }
 
 /**
- * @brief 环形缓冲区压入一个字节(ISR 上下文)
- * @note  缓冲区满时丢弃该字节,靠帧校验兜底恢复同步
+ * @brief ���λ�����ѹ��һ���ֽ�(ISR ������)
+ * @note  ��������ʱ�������ֽ�,��֡У�鶵�׻ָ�ͬ��
  */
 static void ring_push(uint8_t byte)
 {
@@ -115,7 +115,7 @@ static void reset_parser(void)
 }
 
 /**
- * @brief 校验通过后解帧:帧尾 + 校验和均已确认,这里只管取数据
+ * @brief У��ͨ�����֡:֡β + У��;���ȷ��,����ֻ��ȡ����
  */
 static void decode_frame(void)
 {
@@ -125,7 +125,7 @@ static void decode_frame(void)
     const uint8_t flags = rx_frame[4];
     const uint32_t now = HAL_GetTick();
 
-    /* 帧尾校验 */
+    /* ֡βУ�� */
     if ((rx_frame[length - 2U] != PC_LINK_TAIL_0) ||
         (rx_frame[length - 1U] != PC_LINK_TAIL_1))
     {
@@ -133,7 +133,7 @@ static void decode_frame(void)
         return;
     }
 
-    /* 校验和:帧类型字节(偏移 2)起,至校验字节前一字节 */
+    /* У���:֡�����ֽ�(ƫ�� 2)��,��У���ֽ�ǰһ�ֽ� */
     if (rx_frame[checksum_index] !=
         checksum8(&rx_frame[2], (uint8_t)(checksum_index - 2U)))
     {
@@ -161,7 +161,7 @@ static void decode_frame(void)
         fresh.ball_y_m = read_le_float(&rx_frame[33]);
         fresh.ball_z_m = read_le_float(&rx_frame[37]);
 
-        /* 无效位对应的数据清零,防止下位机沿用旧值 */
+        /* ��Чλ��Ӧ����������,��ֹ��λ�����þ�ֵ */
         if ((flags & PC_LINK_FLAG_RED_VALID) == 0U)
         {
             fresh.red_x_m = 0.0F;
@@ -208,12 +208,12 @@ static void decode_frame(void)
     }
     else
     {
-        /* 未知帧类型,丢弃 */
+        /* δ֪֡����,���� */
     }
 }
 
 /**
- * @brief 逐字节解析(任务上下文)
+ * @brief ���ֽڽ���(����������)
  */
 static void parse_byte(uint8_t data)
 {
@@ -235,7 +235,7 @@ static void parse_byte(uint8_t data)
         {
             rx_state = PC_RX_WAIT_HEADER_0;
         }
-        /* data == 0xAA:可能是一个新帧头的开始,保持本状态继续等 0x55 */
+        /* data == 0xAA:������һ����֡ͷ�Ŀ�ʼ,���ֱ�״̬������ 0x55 */
         break;
 
     case PC_RX_WAIT_TYPE:
@@ -259,7 +259,7 @@ static void parse_byte(uint8_t data)
         }
         else if (data == PC_LINK_HEADER_0)
         {
-            /* 可能是新帧头 AA,回退到等 0x55 */
+            /* ��������֡ͷ AA,���˵��� 0x55 */
             rx_state = PC_RX_WAIT_HEADER_1;
         }
         else
@@ -285,13 +285,13 @@ static void parse_byte(uint8_t data)
 }
 
 /**
- * @brief 发送 8 字节状态帧:55 AA | 20 | state | error | checksum | 0D 0A
+ * @brief ���� 8 �ֽ�״̬֡:55 AA | 20 | state | error | checksum | 0D 0A
  */
 static void send_status_frame(void)
 {
     uint8_t frame[PC_LINK_STATUS_FRAME_SIZE];
 
-    frame[0] = PC_LINK_HEADER_1;   /* 状态帧头为 55 AA(与下发帧相反) */
+    frame[0] = PC_LINK_HEADER_1;   /* ״̬֡ͷΪ 55 AA(���·�֡�෴) */
     frame[1] = PC_LINK_HEADER_0;
     frame[2] = PC_LINK_TYPE_STATUS;
     frame[3] = status_state;
@@ -300,12 +300,12 @@ static void send_status_frame(void)
     frame[6] = PC_LINK_TAIL_0;
     frame[7] = PC_LINK_TAIL_1;
 
-    /* 8 字节 @115200 约 0.7ms,在通信任务中阻塞发送足够安全 */
+    /* 8 �ֽ� @115200 Լ 0.7ms,��ͨ�����������������㹻��ȫ */
     (void)HAL_UART_Transmit(pc_uart, frame, sizeof(frame), 2U);
 }
 
 /* ----------------------------------------------------------------------------
- * 公共接口
+ * �����ӿ�
  * --------------------------------------------------------------------------*/
 
 HAL_StatusTypeDef PcLink_Init(void)
@@ -314,9 +314,9 @@ HAL_StatusTypeDef PcLink_Init(void)
 
     pc_uart = &PC_LINK_UART_HANDLE;
 
-    /* 按配置宏重配波特率,确保与上位机 yaml 一致。
-     * DeInit 后 State 复位,HAL_UART_Init 会重新执行 MspInit,
-     * 引脚 / NVIC / DMA 配置不受影响。 */
+    /* �����ú����䲨����,ȷ������λ�� yaml һ�¡�
+     * DeInit �� State ��λ,HAL_UART_Init ������ִ�� MspInit,
+     * ���� / NVIC / DMA ���ò���Ӱ�졣 */
     (void)HAL_UART_DeInit(pc_uart);
     pc_uart->Init.BaudRate = PC_LINK_BAUD_RATE;
     status = HAL_UART_Init(pc_uart);
@@ -360,7 +360,7 @@ void PcLink_Run(void)
         return;
     }
 
-    /* 接收中断异常后的恢复 */
+    /* �����ж��쳣��Ļָ� */
     if (restart_requested)
     {
         restart_requested = false;
@@ -374,7 +374,7 @@ void PcLink_Run(void)
         }
     }
 
-    /* 解析环形缓冲区中积压的字节 */
+    /* �������λ������л�ѹ���ֽ� */
     while (rx_ring_tail != rx_ring_head)
     {
         byte = rx_ring[rx_ring_tail];
@@ -385,7 +385,7 @@ void PcLink_Run(void)
 
     now = HAL_GetTick();
 
-    /* 数据超时 -> 清除有效位,不沿用旧数据 */
+    /* ���ݳ�ʱ -> �����Чλ,�����þ����� */
     if ((uint32_t)(now - last_perception_ms) > PC_LINK_DATA_TIMEOUT_MS)
     {
         perception.flags = 0U;
@@ -395,7 +395,7 @@ void PcLink_Run(void)
         position.flags = 0U;
     }
 
-    /* 状态帧周期回传(>=10Hz) */
+    /* ״̬֡���ڻش�(>=10Hz) */
     if ((uint32_t)(now - last_status_ms) >= PC_LINK_STATUS_PERIOD_MS)
     {
         last_status_ms = now;
@@ -471,7 +471,7 @@ bool PcLink_GetPosition(pc_position_t *out)
 
 void PcLink_SetStatus(uint8_t state, uint8_t error)
 {
-    /* 单字节写对 Cortex-M7 原子,可直接赋值 */
+    /* ���ֽ�д�� Cortex-M7 ԭ��,��ֱ�Ӹ�ֵ */
     status_state = state;
     status_error = error;
 }

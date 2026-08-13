@@ -1,24 +1,24 @@
 /**
  ******************************************************************************
  * @file    path_runner.h
- * @brief   åœ¨çº¿è·Ÿè¸ªæ€»æ§(å¯¹åº” profile_runner.py,è¿è¡Œåœ¨ STM32 ä¸Š)
+ * @brief   ÔÚÏß¸ú×Ù×Ü¿Ø(¶ÔÓ¦ profile_runner.py,ÔËĞĞÔÚ STM32 ÉÏ)
  *
- * å¯¹æ¥æœ¬ä»“åº“å·²æœ‰æ¨¡å—(æ•°æ®å…¨éƒ¨æ¥è‡ªçœŸå®å¤–è®¾,æ— ä»¿çœŸ):
- *   ä¸Šä½æœºä½å§¿  0x11 ä½ç½®å¸§ -> user/pc_link       (PcLink_GetPosition)
- *   IMU é™€èº/yaw           -> user/imu           (ImuMain_GetData)
- *   å‰/å·¦æ¿€å…‰(DT35)        -> user/com_link      (dt35_link[].distance_cm,
- *                                 ç”± UART9 çš„ DT35 å¸§è§£æå¾—åˆ°)
- *   åº•ç›˜æ‰§è¡Œ               -> user/chassis_vesc  (Chassis_SetVelocity)
+ * ¶Ô½Ó±¾²Ö¿âÒÑÓĞÄ£¿é(Êı¾İÈ«²¿À´×ÔÕæÊµÍâÉè,ÎŞ·ÂÕæ):
+ *   ÉÏÎ»»úÎ»×Ë  0x11 Î»ÖÃÖ¡ -> user/pc_link       (PcLink_GetPosition)
+ *   IMU ÍÓÂİ/yaw           -> user/imu           (ImuMain_GetData)
+ *   Ç°/×ó¼¤¹â(DT35)        -> user/com_link      (dt35_link[].distance_cm,
+ *                                 ÓÉ UART9 µÄ DT35 Ö¡½âÎöµÃµ½)
+ *   µ×ÅÌÖ´ĞĞ               -> user/chassis_vesc  (Chassis_SetVelocity)
  *
- * æ§åˆ¶å‘¨æœŸ PATH_CONTROL_PERIOD_MS(é»˜è®¤ 5ms),æ”¾åœ¨ commTask é‡Œä»¥ 1ms
- * å‘¨æœŸè°ƒç”¨ PathRunner_Run(),å†…éƒ¨è‡ªè¡Œåˆ†é¢‘ã€‚
+ * ¿ØÖÆÖÜÆÚ PATH_CONTROL_PERIOD_MS(Ä¬ÈÏ 5ms),·ÅÔÚ commTask ÀïÒÔ 1ms
+ * ÖÜÆÚµ÷ÓÃ PathRunner_Run(),ÄÚ²¿×ÔĞĞ·ÖÆµ¡£
  *
- * å®‰å…¨è¡Œä¸º:
- *   - ä¸Šä½æœºä½å§¿ä¸¢å¤± >500ms    -> ä¸»åŠ¨ STOP
- *   - IMU ç¦»çº¿                 -> ä¸»åŠ¨ STOP
- *   - å‰æ¿€å…‰ <12cm             -> å¼ºåˆ¶ vx=0(ä»…ä¿ç•™èˆªå‘é”å®š)
- *   - å‰æ¿€å…‰ç¦»çº¿(å¯é…ç½®)      -> ä¸»åŠ¨ STOP
- *   - å…¨ç¨‹è¶…æ—¶ PATH_MAX_RUN_MS -> ä¸»åŠ¨ STOP
+ * °²È«ĞĞÎª:
+ *   - ÉÏÎ»»úÎ»×Ë¶ªÊ§ >500ms    -> Ö÷¶¯ STOP
+ *   - IMU ÀëÏß                 -> Ö÷¶¯ STOP
+ *   - Ç°¼¤¹â <12cm             -> Ç¿ÖÆ vx=0(½ö±£Áôº½ÏòËø¶¨)
+ *   - Ç°¼¤¹âÀëÏß(¿ÉÅäÖÃ)      -> Ö÷¶¯ STOP
+ *   - È«³Ì³¬Ê± PATH_MAX_RUN_MS -> Ö÷¶¯ STOP
  ******************************************************************************
  */
 #ifndef PATH_RUNNER_H
@@ -31,31 +31,31 @@
 #endif
 
 /**
- * @brief åˆå§‹åŒ–è§„åˆ’å™¨(è¿›å…¥ INIT çŠ¶æ€;åŒæ—¶å…³é—­ IMU æ¨¡å—è‡ªå¸¦èˆªå‘ä¿æŒ,
- *        ç”±æœ¬æ¨¡å—çš„ yaw-lock æ¥ç®¡åº•ç›˜ z æŒ‡ä»¤)
+ * @brief ³õÊ¼»¯¹æ»®Æ÷(½øÈë INIT ×´Ì¬;Í¬Ê±¹Ø±Õ IMU Ä£¿é×Ô´øº½Ïò±£³Ö,
+ *        ÓÉ±¾Ä£¿éµÄ yaw-lock ½Ó¹Üµ×ÅÌ z Ö¸Áî)
  */
 void PathRunner_Init(void);
 
 /**
- * @brief ä¸»å¾ªç¯è°ƒç”¨(1ms å‘¨æœŸ,å†…éƒ¨æŒ‰æ§åˆ¶å‘¨æœŸåˆ†é¢‘)
+ * @brief Ö÷Ñ­»·µ÷ÓÃ(1ms ÖÜÆÚ,ÄÚ²¿°´¿ØÖÆÖÜÆÚ·ÖÆµ)
  */
 void PathRunner_Run(void);
 
 /**
- * @brief è¯»å–è°ƒè¯•ä¿¡æ¯(æ¯ 400ms é‡‡æ ·ä¸€æ¬¡å³å¯)
+ * @brief ¶ÁÈ¡µ÷ÊÔĞÅÏ¢(Ã¿ 400ms ²ÉÑùÒ»´Î¼´¿É)
  */
 void PathRunner_GetDebug(path_debug_t *debug);
 
 /**
- * @brief è¯»å–ç¦»çº¿ç”Ÿæˆçš„å‚è€ƒè½¨è¿¹(æ„å»ºå®Œæˆåæœ‰æ•ˆ;ç”¨äº CSV å¯¼å‡º/ä¸Šä½æœºå¯è§†åŒ–)
- * @param count è¾“å‡º:è½¨è¿¹ç‚¹æ•°
- * @retval è½¨è¿¹æ•°ç»„æŒ‡é’ˆ;æœªæ„å»ºå®Œæˆè¿”å› NULL
+ * @brief ¶ÁÈ¡ÀëÏßÉú³ÉµÄ²Î¿¼¹ì¼£(¹¹½¨Íê³ÉºóÓĞĞ§;ÓÃÓÚ CSV µ¼³ö/ÉÏÎ»»ú¿ÉÊÓ»¯)
+ * @param count Êä³ö:¹ì¼£µãÊı
+ * @retval ¹ì¼£Êı×éÖ¸Õë;Î´¹¹½¨Íê³É·µ»Ø NULL
  */
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count);
 
 #if PATH_DEBUG && defined(PATH_DEBUG_UART_HANDLE)
 /**
- * @brief æ¯ 400ms å‘è°ƒè¯•ä¸²å£è¾“å‡ºä¸€è¡Œè¿è¡ŒçŠ¶æ€(è°ƒè¯•ç”¨)
+ * @brief Ã¿ 400ms Ïòµ÷ÊÔ´®¿ÚÊä³öÒ»ĞĞÔËĞĞ×´Ì¬(µ÷ÊÔÓÃ)
  */
 void PathRunner_DebugDump(UART_HandleTypeDef *uart);
 #endif

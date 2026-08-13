@@ -1,18 +1,18 @@
 /**
  ******************************************************************************
  * @file    pc_link.h
- * @brief   å°ç”µè„‘(ROS2 competition_gateway)ä¸²å£å¯¹æ¥ â€”â€” å…¬å…±æ¥å£
+ * @brief   Ğ¡µçÄÔ(ROS2 competition_gateway)´®¿Ú¶Ô½Ó ¡ª¡ª ¹«¹²½Ó¿Ú
  *
- * åè®®è¦ç‚¹(ä¸ä¸Šä½æœº competition_gateway/serial_protocol.hpp å®Œå…¨ä¸€è‡´):
+ * Ğ­ÒéÒªµã(ÓëÉÏÎ»»ú competition_gateway/serial_protocol.hpp ÍêÈ«Ò»ÖÂ):
  *
- *  ä¸Šä½æœº -> STM32(åŒä¸€ä¸²å£äº¤æ›¿å‘é€):
- *   æ„ŸçŸ¥å¸§ 44B: AA 55 | 10 | seq | flags | red_xyz | blue_xyz | ball_xyz
- *              (9 ä¸ª float,IEEE754 å°ç«¯) | checksum | 0D 0A
- *   ä½ç½®å¸§ 24B: AA 55 | 11 | seq | flags | field_xyz | field_w | checksum | 0D 0A
- *   STM32 -> ä¸Šä½æœº(>=10Hz):
- *   çŠ¶æ€å¸§  8B: 55 AA | 20 | state | error | checksum | 0D 0A
+ *  ÉÏÎ»»ú -> STM32(Í¬Ò»´®¿Ú½»Ìæ·¢ËÍ):
+ *   ¸ĞÖªÖ¡ 44B: AA 55 | 10 | seq | flags | red_xyz | blue_xyz | ball_xyz
+ *              (9 ¸ö float,IEEE754 Ğ¡¶Ë) | checksum | 0D 0A
+ *   Î»ÖÃÖ¡ 24B: AA 55 | 11 | seq | flags | field_xyz | field_w | checksum | 0D 0A
+ *   STM32 -> ÉÏÎ»»ú(>=10Hz):
+ *   ×´Ì¬Ö¡  8B: 55 AA | 20 | state | error | checksum | 0D 0A
  *
- *  æ ¡éªŒå’Œ = å¸§ç±»å‹å­—èŠ‚èµ·åˆ°æ ¡éªŒå­—èŠ‚å‰ä¸€å­—èŠ‚çš„ 8 ä½ç´¯åŠ å’Œã€‚
+ *  Ğ£ÑéºÍ = Ö¡ÀàĞÍ×Ö½ÚÆğµ½Ğ£Ñé×Ö½ÚÇ°Ò»×Ö½ÚµÄ 8 Î»ÀÛ¼ÓºÍ¡£
  ******************************************************************************
  */
 #ifndef PC_LINK_H
@@ -27,7 +27,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* å¸§å­—æ®µå¸¸é‡ */
+/* Ö¡×Ö¶Î³£Á¿ */
 #define PC_LINK_HEADER_0               0xAAU
 #define PC_LINK_HEADER_1               0x55U
 #define PC_LINK_TYPE_PERCEPTION        0x10U
@@ -36,21 +36,21 @@
 #define PC_LINK_TAIL_0                 0x0DU
 #define PC_LINK_TAIL_1                 0x0AU
 
-/* å¸§é•¿ */
+/* Ö¡³¤ */
 #define PC_LINK_PERCEPTION_FRAME_SIZE  44U
 #define PC_LINK_POSITION_FRAME_SIZE    24U
 #define PC_LINK_STATUS_FRAME_SIZE      8U
 
-/* æ„ŸçŸ¥å¸§æœ‰æ•ˆä½ flags(ä¸ä¸Šä½æœº perception_flag_t ä¸€è‡´) */
+/* ¸ĞÖªÖ¡ÓĞĞ§Î» flags(ÓëÉÏÎ»»ú perception_flag_t Ò»ÖÂ) */
 #define PC_LINK_FLAG_RED_VALID         (1U << 0)
 #define PC_LINK_FLAG_BLUE_VALID        (1U << 1)
 #define PC_LINK_FLAG_BALL_VALID        (1U << 2)
 
-/* ä½ç½®å¸§æœ‰æ•ˆä½ flags(ä¸ä¸Šä½æœº position_flag_t ä¸€è‡´) */
+/* Î»ÖÃÖ¡ÓĞĞ§Î» flags(ÓëÉÏÎ»»ú position_flag_t Ò»ÖÂ) */
 #define PC_LINK_FLAG_FIELD_VALID       (1U << 0)
 
 /**
- * @brief æ„ŸçŸ¥æ•°æ®:çº¢è“å— + é‡‘çƒä½ç½®,å•ä½ m
+ * @brief ¸ĞÖªÊı¾İ:ºìÀ¶¿é + ½ğÇòÎ»ÖÃ,µ¥Î» m
  */
 typedef struct
 {
@@ -63,11 +63,11 @@ typedef struct
     float ball_x_m;
     float ball_y_m;
     float ball_z_m;
-    uint8_t flags;              /* PC_LINK_FLAG_* ç»„åˆ,æ— æ•ˆä½å¯¹åº”çš„æ•°æ®å·²æ¸…é›¶ */
+    uint8_t flags;              /* PC_LINK_FLAG_* ×éºÏ,ÎŞĞ§Î»¶ÔÓ¦µÄÊı¾İÒÑÇåÁã */
 } pc_perception_t;
 
 /**
- * @brief ä½ç½®æ•°æ®:æœºå™¨äººèµ›åœºåæ ‡ + æ—‹è½¬å››å…ƒæ•° w åˆ†é‡
+ * @brief Î»ÖÃÊı¾İ:»úÆ÷ÈËÈü³¡×ø±ê + Ğı×ªËÄÔªÊı w ·ÖÁ¿
  */
 typedef struct
 {
@@ -79,71 +79,71 @@ typedef struct
 } pc_position_t;
 
 /**
- * @brief åˆå§‹åŒ–å°ç”µè„‘ä¸²å£:æŒ‰é…ç½®å®é€‰å®šä¸²å£å¹¶é‡é…æ³¢ç‰¹ç‡,å¯åŠ¨ä¸­æ–­æ¥æ”¶
- * @retval HAL çŠ¶æ€
+ * @brief ³õÊ¼»¯Ğ¡µçÄÔ´®¿Ú:°´ÅäÖÃºêÑ¡¶¨´®¿Ú²¢ÖØÅä²¨ÌØÂÊ,Æô¶¯ÖĞ¶Ï½ÓÊÕ
+ * @retval HAL ×´Ì¬
  */
 HAL_StatusTypeDef PcLink_Init(void);
 
 /**
- * @brief å‘¨æœŸè°ƒç”¨:è§£æç¯å½¢ç¼“å†²åŒºå­—èŠ‚æµã€å¤„ç†æ•°æ®è¶…æ—¶ã€å‘¨æœŸå›ä¼ çŠ¶æ€å¸§
- * @note  å»ºè®®åœ¨é€šä¿¡ä»»åŠ¡ä¸­ä»¥ 1ms å‘¨æœŸè°ƒç”¨(ä¸ ComputerLink_Run å¹¶åˆ—)
+ * @brief ÖÜÆÚµ÷ÓÃ:½âÎö»·ĞÎ»º³åÇø×Ö½ÚÁ÷¡¢´¦ÀíÊı¾İ³¬Ê±¡¢ÖÜÆÚ»Ø´«×´Ì¬Ö¡
+ * @note  ½¨ÒéÔÚÍ¨ĞÅÈÎÎñÖĞÒÔ 1ms ÖÜÆÚµ÷ÓÃ(Óë ComputerLink_Run ²¢ÁĞ)
  */
 void PcLink_Run(void);
 
 /**
- * @brief ä¸²å£å•å­—èŠ‚æ¥æ”¶å®Œæˆå›è°ƒ(ISR ä¸Šä¸‹æ–‡)
- * @param uart è§¦å‘å›è°ƒçš„ä¸²å£å¥æŸ„
+ * @brief ´®¿Úµ¥×Ö½Ú½ÓÊÕÍê³É»Øµ÷(ISR ÉÏÏÂÎÄ)
+ * @param uart ´¥·¢»Øµ÷µÄ´®¿Ú¾ä±ú
  */
 void PcLink_RxCplt(UART_HandleTypeDef *uart);
 
 /**
- * @brief ä¸²å£é”™è¯¯å›è°ƒ,è¯·æ±‚æ¢å¤æ¥æ”¶(ISR ä¸Šä¸‹æ–‡)
- * @param uart è§¦å‘é”™è¯¯çš„ä¸²å£å¥æŸ„
+ * @brief ´®¿Ú´íÎó»Øµ÷,ÇëÇó»Ö¸´½ÓÊÕ(ISR ÉÏÏÂÎÄ)
+ * @param uart ´¥·¢´íÎóµÄ´®¿Ú¾ä±ú
  */
 void PcLink_Error(UART_HandleTypeDef *uart);
 
 /**
- * @brief è¯»å–æœ€æ–°æ„ŸçŸ¥æ•°æ®(çº¢è“å— / é‡‘çƒ)
- * @param perception è¾“å‡ºç¼“å†²
- * @retval true æ•°æ®ä¸­æœ‰è‡³å°‘ä¸€ä¸ªç›®æ ‡æœ‰æ•ˆ;false æ— æœ‰æ•ˆç›®æ ‡æˆ–å‚æ•°ä¸ºç©º
+ * @brief ¶ÁÈ¡×îĞÂ¸ĞÖªÊı¾İ(ºìÀ¶¿é / ½ğÇò)
+ * @param perception Êä³ö»º³å
+ * @retval true Êı¾İÖĞÓĞÖÁÉÙÒ»¸öÄ¿±êÓĞĞ§;false ÎŞÓĞĞ§Ä¿±ê»ò²ÎÊıÎª¿Õ
  */
 bool PcLink_GetPerception(pc_perception_t *perception);
 
 /**
- * @brief è¯»å–æœ€æ–°ä½ç½®æ•°æ®(èµ›åœºåæ ‡ + æ—‹è½¬è§’)
- * @param position è¾“å‡ºç¼“å†²
- * @retval true å®šä½æœ‰æ•ˆ;false å®šä½æ— æ•ˆæˆ–å‚æ•°ä¸ºç©º
+ * @brief ¶ÁÈ¡×îĞÂÎ»ÖÃÊı¾İ(Èü³¡×ø±ê + Ğı×ª½Ç)
+ * @param position Êä³ö»º³å
+ * @retval true ¶¨Î»ÓĞĞ§;false ¶¨Î»ÎŞĞ§»ò²ÎÊıÎª¿Õ
  */
 bool PcLink_GetPosition(pc_position_t *position);
 
 /**
- * @brief è®¾ç½®å›ä¼ ä¸Šä½æœºçš„æ¿ç«¯çŠ¶æ€(çŠ¶æ€æœºçŠ¶æ€ / é”™è¯¯ç )
- * @param state æœºå™¨äººçŠ¶æ€æœºçŠ¶æ€
- * @param error æ¿ç«¯é”™è¯¯ç 
+ * @brief ÉèÖÃ»Ø´«ÉÏÎ»»úµÄ°å¶Ë×´Ì¬(×´Ì¬»ú×´Ì¬ / ´íÎóÂë)
+ * @param state »úÆ÷ÈË×´Ì¬»ú×´Ì¬
+ * @param error °å¶Ë´íÎóÂë
  */
 void PcLink_SetStatus(uint8_t state, uint8_t error);
 
 /**
- * @brief æŸ¥è¯¢å°ç”µè„‘é“¾è·¯æ˜¯å¦åœ¨çº¿(è¶…æ—¶å†…æ”¶åˆ°è¿‡æ„ŸçŸ¥å¸§æˆ–ä½ç½®å¸§)
- * @retval true åœ¨çº¿;false ç¦»çº¿
+ * @brief ²éÑ¯Ğ¡µçÄÔÁ´Â·ÊÇ·ñÔÚÏß(³¬Ê±ÄÚÊÕµ½¹ı¸ĞÖªÖ¡»òÎ»ÖÃÖ¡)
+ * @retval true ÔÚÏß;false ÀëÏß
  */
 bool PcLink_IsOnline(void);
 
 /**
- * @brief è¯»å–é“¾è·¯ç»Ÿè®¡:ç´¯è®¡æ”¶åˆ°çš„å¥½å¸§æ•°ä¸æ ¡éªŒå¤±è´¥å¸§æ•°(CRC é”™è¯¯æ•°)
- * @param frames     è¾“å‡º:é€šè¿‡æ ¡éªŒçš„å¸§æ•°
- * @param crc_errors è¾“å‡º:å¸§å°¾/æ ¡éªŒå’Œé”™è¯¯å¸§æ•°
+ * @brief ¶ÁÈ¡Á´Â·Í³¼Æ:ÀÛ¼ÆÊÕµ½µÄºÃÖ¡ÊıÓëĞ£ÑéÊ§°ÜÖ¡Êı(CRC ´íÎóÊı)
+ * @param frames     Êä³ö:Í¨¹ıĞ£ÑéµÄÖ¡Êı
+ * @param crc_errors Êä³ö:Ö¡Î²/Ğ£ÑéºÍ´íÎóÖ¡Êı
  */
 void PcLink_GetStats(uint32_t *frames, uint32_t *crc_errors);
 
 /**
- * @brief è¯»å–ä½ç½®å¸§åºå·(ç´¯è®¡æ”¶åˆ°ä¸”é€šè¿‡æ ¡éªŒçš„ 0x11 å¸§æ•°)
- * @note  ä¸Šä½æœºæ„ŸçŸ¥å¸§/ä½ç½®å¸§äº¤æ›¿å‘é€,æ¶ˆè´¹è€…å¯ç”¨è¯¥å€¼åˆ¤æ–­æ˜¯å¦æ”¶åˆ°
- *        "æ–°çš„"ä½ç½®å¸§,é¿å…åŒä¸€å¸§è¢«å‘¨æœŸä»»åŠ¡é‡å¤æ¶ˆè´¹
+ * @brief ¶ÁÈ¡Î»ÖÃÖ¡ĞòºÅ(ÀÛ¼ÆÊÕµ½ÇÒÍ¨¹ıĞ£ÑéµÄ 0x11 Ö¡Êı)
+ * @note  ÉÏÎ»»ú¸ĞÖªÖ¡/Î»ÖÃÖ¡½»Ìæ·¢ËÍ,Ïû·ÑÕß¿ÉÓÃ¸ÃÖµÅĞ¶ÏÊÇ·ñÊÕµ½
+ *        "ĞÂµÄ"Î»ÖÃÖ¡,±ÜÃâÍ¬Ò»Ö¡±»ÖÜÆÚÈÎÎñÖØ¸´Ïû·Ñ
  */
 uint32_t PcLink_GetPositionSeq(void);
 
-#else /* PC_LINK_ENABLE == 0:å…¨éƒ¨æ¥å£é€€åŒ–ä¸ºç©ºæ“ä½œ */
+#else /* PC_LINK_ENABLE == 0:È«²¿½Ó¿ÚÍË»¯Îª¿Õ²Ù×÷ */
 
 #define PcLink_Init()              (HAL_OK)
 #define PcLink_Run()               ((void)0)

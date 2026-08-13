@@ -1,23 +1,23 @@
 /**
  ******************************************************************************
  * @file    path_geometry.h
- * @brief   å‡ ä½•å·¥å…·:å¢™(AABB)ã€è·ç¦»åœºã€å°„çº¿æŠ•å°„(Slab æ³•)ã€åæ ‡ç³»å˜æ¢
+ * @brief   ¼¸ºÎ¹¤¾ß:Ç½(AABB)¡¢¾àÀë³¡¡¢ÉäÏßÍ¶Éä(Slab ·¨)¡¢×ø±êÏµ±ä»»
  *
- * ä¾èµ–: path_config.h / path_types.h / math.h
+ * ÒÀÀµ: path_config.h / path_types.h / math.h
  *
- * åæ ‡ç³»çº¦å®š(ä¸ field.yaml frame_convention ä¸€è‡´,å¹¶æ³¨æ˜ä¸åº•ç›˜çš„å…³ç³»):
- *   ä¸–ç•Œç³»:åŸç‚¹åœºåœ°å·¦ä¸‹è§’,+x å‘å³,+y å‘å‰(è¿œç¦»æ“ä½œæ‰‹)ã€‚
- *   ç”¨æˆ· yaw:ä¸Šç”µæ¸…é›¶,yaw=0 æ—¶è½¦å¤´æœä¸–ç•Œ +y,æ­£æ–¹å‘ä¸ºé€†æ—¶é’ˆã€‚
- *   è½¦ä½“ç³»(body):+x = è½¦å¤´æ­£å‰(= world +y å½“ yaw=0),
- *                +y = è½¦ä½“æ­£å·¦(= world -x å½“ yaw=0)ã€‚
- *   åº•ç›˜ç³»(chassis,å¯¹åº” chassis_main.c çš„ Chassis_SetVelocity):
- *                +x = å‘å³å¹³ç§»,+y = å‘å‰,z = é€†æ—¶é’ˆã€‚
+ * ×ø±êÏµÔ¼¶¨(Óë field.yaml frame_convention Ò»ÖÂ,²¢×¢Ã÷Óëµ×ÅÌµÄ¹ØÏµ):
+ *   ÊÀ½çÏµ:Ô­µã³¡µØ×óÏÂ½Ç,+x ÏòÓÒ,+y ÏòÇ°(Ô¶Àë²Ù×÷ÊÖ)¡£
+ *   ÓÃ»§ yaw:ÉÏµçÇåÁã,yaw=0 Ê±³µÍ·³¯ÊÀ½ç +y,Õı·½ÏòÎªÄæÊ±Õë¡£
+ *   ³µÌåÏµ(body):+x = ³µÍ·ÕıÇ°(= world +y µ± yaw=0),
+ *                +y = ³µÌåÕı×ó(= world -x µ± yaw=0)¡£
+ *   µ×ÅÌÏµ(chassis,¶ÔÓ¦ chassis_main.c µÄ Chassis_SetVelocity):
+ *                +x = ÏòÓÒÆ½ÒÆ,+y = ÏòÇ°,z = ÄæÊ±Õë¡£
  *
- *   ç»å…¸ ROS åæ ‡ç³»é‡Œ yaw=0 æœ +x,æœ¬å·¥ç¨‹ yaw=0 æœ +y,å·®ä¸€ä¸ª Ï€/2ã€‚
- *   æœ¬æ¨¡å—çš„å–èˆ:
- *     - è½¦ä½“ç³»(å‰/å·¦)å˜æ¢ä½¿ç”¨ R(yaw + Ï€/2),æ»¡è¶³åŸå§‹è§„æ ¼è¦æ±‚;
- *     - åº•ç›˜ç³»(å³/å‰)å˜æ¢ç›´æ¥ä½¿ç”¨ R(yaw),ä¸ Chassis_SetVelocity
- *       çš„åæ ‡ç³»å®Œå…¨ä¸€è‡´,ç­‰ä»·äºå…ˆåš R(yaw+Ï€/2) å†ä¹˜ 90Â° æ—‹è½¬ã€‚
+ *   ¾­µä ROS ×ø±êÏµÀï yaw=0 ³¯ +x,±¾¹¤³Ì yaw=0 ³¯ +y,²îÒ»¸ö ¦Ğ/2¡£
+ *   ±¾Ä£¿éµÄÈ¡Éá:
+ *     - ³µÌåÏµ(Ç°/×ó)±ä»»Ê¹ÓÃ R(yaw + ¦Ğ/2),Âú×ãÔ­Ê¼¹æ¸ñÒªÇó;
+ *     - µ×ÅÌÏµ(ÓÒ/Ç°)±ä»»Ö±½ÓÊ¹ÓÃ R(yaw),Óë Chassis_SetVelocity
+ *       µÄ×ø±êÏµÍêÈ«Ò»ÖÂ,µÈ¼ÛÓÚÏÈ×ö R(yaw+¦Ğ/2) ÔÙ³Ë 90¡ã Ğı×ª¡£
  ******************************************************************************
  */
 #ifndef PATH_GEOMETRY_H
@@ -28,7 +28,7 @@
 
 #include <stdbool.h>
 
-/* è½´å¯¹é½çŸ©å½¢å¢™ */
+/* Öá¶ÔÆë¾ØĞÎÇ½ */
 typedef struct
 {
     float xmin;
@@ -37,7 +37,7 @@ typedef struct
     float ymax;
 } path_wall_t;
 
-/* é™æ€å¢™é›†åˆ */
+/* ¾²Ì¬Ç½¼¯ºÏ */
 typedef struct
 {
     const path_wall_t *walls;
@@ -45,28 +45,28 @@ typedef struct
 } path_gridmap_t;
 
 /**
- * @brief æ„å»ºçœŸå®å¢™åœ°å›¾(æœªè†¨èƒ€,PATH_WALLS_TABLE)
+ * @brief ¹¹½¨ÕæÊµÇ½µØÍ¼(Î´ÅòÕÍ,PATH_WALLS_TABLE)
  */
 void PathGridMap_BuildReal(path_gridmap_t *map);
 
 /**
- * @brief æ„å»ºè†¨èƒ€å¢™åœ°å›¾(æ¯ä¸ªå¢™å‘å¤–æ‰© PATH_INFLATE_RADIUS_M)
+ * @brief ¹¹½¨ÅòÕÍÇ½µØÍ¼(Ã¿¸öÇ½ÏòÍâÀ© PATH_INFLATE_RADIUS_M)
  */
 void PathGridMap_BuildInflated(path_gridmap_t *map);
 
 /**
- * @brief ç‚¹æ˜¯å¦åœ¨è†¨èƒ€å¢™å†…(ç¢°æ’åˆ¤å®šç”¨)
+ * @brief µãÊÇ·ñÔÚÅòÕÍÇ½ÄÚ(Åö×²ÅĞ¶¨ÓÃ)
  */
 bool PathGridMap_Contains(const path_gridmap_t *map, float x, float y);
 
 /**
- * @brief ç‚¹åˆ°æœ€è¿‘å¢™çš„è·ç¦»(m,ç‚¹åœ¨å¢™å†…è¿”å› 0)
+ * @brief µãµ½×î½üÇ½µÄ¾àÀë(m,µãÔÚÇ½ÄÚ·µ»Ø 0)
  */
 float PathGridMap_DistTo(const path_gridmap_t *map, float x, float y);
 
 /**
- * @brief å°„çº¿æŠ•å°„:è¿”å›æ²¿æ–¹å‘ (dx,dy)(å•ä½å‘é‡)åˆ°æœ€è¿‘å¢™äº¤ç‚¹çš„è·ç¦»;
- *        è¶…è¿‡ max_range æˆ–æ— äº¤ç‚¹è¿”å› max_rangeã€‚Slab æ³•ã€‚
+ * @brief ÉäÏßÍ¶Éä:·µ»ØÑØ·½Ïò (dx,dy)(µ¥Î»ÏòÁ¿)µ½×î½üÇ½½»µãµÄ¾àÀë;
+ *        ³¬¹ı max_range »òÎŞ½»µã·µ»Ø max_range¡£Slab ·¨¡£
  */
 float PathGridMap_RayCast(const path_gridmap_t *map,
                           float ox, float oy,
@@ -74,51 +74,51 @@ float PathGridMap_RayCast(const path_gridmap_t *map,
                           float max_range);
 
 /**
- * @brief æŠŠè½è¿›è†¨èƒ€å¢™çš„ç‚¹æ²¿æœ€å°ç©¿é€æ–¹å‘æ¨å‡ºå¢™å¤–
- * @param map  è†¨èƒ€å¢™åœ°å›¾
- * @param x,y  è¾“å…¥è¾“å‡ºåæ ‡
- * @param step_m å•æ­¥æ­¥é•¿
- * @param max_iters æœ€å¤§è¿­ä»£æ¬¡æ•°
- * @retval æ˜¯å¦å·²æ¨å‡ºå¢™å¤–
+ * @brief °ÑÂä½øÅòÕÍÇ½µÄµãÑØ×îĞ¡´©Í¸·½ÏòÍÆ³öÇ½Íâ
+ * @param map  ÅòÕÍÇ½µØÍ¼
+ * @param x,y  ÊäÈëÊä³ö×ø±ê
+ * @param step_m µ¥²½²½³¤
+ * @param max_iters ×î´óµü´ú´ÎÊı
+ * @retval ÊÇ·ñÒÑÍÆ³öÇ½Íâ
  */
 bool PathGridMap_PushOut(const path_gridmap_t *map, float *x, float *y,
                          float step_m, uint8_t max_iters);
 
 /**
- * @brief è§’åº¦å½’ä¸€åŒ–åˆ° [-pi, pi)
+ * @brief ½Ç¶È¹éÒ»»¯µ½ [-pi, pi)
  */
 float PathWrapAngle(float angle_rad);
 
 /**
- * @brief è½¦ä½“ç³» -> ä¸–ç•Œç³»:R(yaw + pi/2)
- * @param yaw_user ç”¨æˆ·çº¦å®š yaw(yaw=0 æœä¸–ç•Œ +y)
+ * @brief ³µÌåÏµ -> ÊÀ½çÏµ:R(yaw + pi/2)
+ * @param yaw_user ÓÃ»§Ô¼¶¨ yaw(yaw=0 ³¯ÊÀ½ç +y)
  */
 void PathBodyToWorld(float vx_b, float vy_b, float yaw_user,
                      float *vx_w, float *vy_w);
 
 /**
- * @brief ä¸–ç•Œç³» -> è½¦ä½“ç³»:R(-(yaw + pi/2))
+ * @brief ÊÀ½çÏµ -> ³µÌåÏµ:R(-(yaw + pi/2))
  */
 void PathWorldToBody(float vx_w, float vy_w, float yaw_user,
                      float *vx_b, float *vy_b);
 
 /**
- * @brief ä¸–ç•Œç³» -> åº•ç›˜ç³»(Chassis_SetVelocity åæ ‡ç³»):R(yaw)
- * @note  åº•ç›˜ç³» x=å‘å³ã€y=å‘å‰,å› æ­¤ç›´æ¥ä½¿ç”¨ R(yaw) è€Œé R(yaw+pi/2);
- *        ä¸è½¦ä½“ç³»ä¹‹é—´å·®ä¸€ä¸ª 90Â° æ—‹è½¬,å·²åœ¨æ³¨é‡Šä¸­è¯´æ˜ã€‚
+ * @brief ÊÀ½çÏµ -> µ×ÅÌÏµ(Chassis_SetVelocity ×ø±êÏµ):R(yaw)
+ * @note  µ×ÅÌÏµ x=ÏòÓÒ¡¢y=ÏòÇ°,Òò´ËÖ±½ÓÊ¹ÓÃ R(yaw) ¶ø·Ç R(yaw+pi/2);
+ *        Óë³µÌåÏµÖ®¼ä²îÒ»¸ö 90¡ã Ğı×ª,ÒÑÔÚ×¢ÊÍÖĞËµÃ÷¡£
  */
 void PathWorldToChassis(float vx_w, float vy_w, float yaw_user,
                         float *vx_c, float *vy_c);
 
 /**
- * @brief åº•ç›˜ç³» -> ä¸–ç•Œç³»:R(-yaw)
+ * @brief µ×ÅÌÏµ -> ÊÀ½çÏµ:R(-yaw)
  */
 void PathChassisToWorld(float vx_c, float vy_c, float yaw_user,
                         float *vx_w, float *vy_w);
 
 /**
- * @brief å‰æ¿€å…‰å°„çº¿:ç»™å‡ºä¸–ç•Œç³»å°„çº¿åŸç‚¹å’Œå•ä½æ–¹å‘
- * @param mount_body_x/y æ¿€å…‰åœ¨è½¦ä½“ç³»æŒ‚è½½åæ ‡(PATH_LASER_FRONT_*)
+ * @brief Ç°¼¤¹âÉäÏß:¸ø³öÊÀ½çÏµÉäÏßÔ­µãºÍµ¥Î»·½Ïò
+ * @param mount_body_x/y ¼¤¹âÔÚ³µÌåÏµ¹ÒÔØ×ø±ê(PATH_LASER_FRONT_*)
  */
 void PathLaserRay(float robot_x, float robot_y, float yaw_user,
                   float mount_body_x, float mount_body_y,

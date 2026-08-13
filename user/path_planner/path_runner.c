@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_runner.c
- * @brief   åœ¨çº¿è·Ÿè¸ªæ€»æ§å®ç°(ç¦»çº¿å‰–é¢æŸ¥è¡¨ + çº¯è¿½è¸ª + æ¿€å…‰å…œåº• + èˆªå‘é”)
+ * @brief   ÔÚÏß¸ú×Ù×Ü¿ØÊµÏÖ(ÀëÏßÆÊÃæ²é±í + ´¿×·×Ù + ¼¤¹â¶µµ× + º½ÏòËø)
  ******************************************************************************
  */
 #include "path_runner.h"
@@ -14,7 +14,7 @@
 #include "path_spline.h"
 #include "path_yaw_lock.h"
 
-/* ä»“åº“å·²æœ‰æ¨¡å—(å…¨éƒ¨çœŸå®å¤–è®¾æ•°æ®) */
+/* ²Ö¿âÒÑÓĞÄ£¿é(È«²¿ÕæÊµÍâÉèÊı¾İ) */
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
@@ -24,7 +24,7 @@
 #include <string.h>
 
 #if PATH_DEBUG
-#include "usart.h"   /* PATH_DEBUG_UART_HANDLE å¼•ç”¨(å¦‚ huart8) */
+#include "usart.h"   /* PATH_DEBUG_UART_HANDLE ÒıÓÃ(Èç huart8) */
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -48,7 +48,7 @@ static uint32_t last_step_ms;
 static uint32_t last_debug_ms;
 #endif
 static uint16_t last_i_near;
-static uint32_t last_pc_frame_count;   /* ä¸Šä½æœºå¸§å»é‡:æ¯å¸§åªèåˆä¸€æ¬¡ */
+static uint32_t last_pc_frame_count;   /* ÉÏÎ»»úÖ¡È¥ÖØ:Ã¿Ö¡Ö»ÈÚºÏÒ»´Î */
 static float last_cmd_vx;
 static float last_cmd_vy;
 static float last_cmd_w;
@@ -64,13 +64,13 @@ static void runner_stop(path_reason_t why)
     Chassis_StopAll();
 }
 
-/* æ•°å€¼å¥åº·æ£€æŸ¥:NaN/Inf/é‡çº§å¼‚å¸¸ä¸€å¾‹åˆ¤éæ³•(v == v å¯ç§»æ¤åœ°åˆ¤ NaN) */
+/* ÊıÖµ½¡¿µ¼ì²é:NaN/Inf/Á¿¼¶Òì³£Ò»ÂÉÅĞ·Ç·¨(v == v ¿ÉÒÆÖ²µØÅĞ NaN) */
 static bool num_ok(float v)
 {
     return (v == v) && (fabsf(v) < 1e6f);
 }
 
-/* æ¯ä¸ªæ§åˆ¶å‘¨æœŸè¯»ä¸€æ¬¡çœŸå®ä¼ æ„Ÿå™¨å¹¶åšèåˆ */
+/* Ã¿¸ö¿ØÖÆÖÜÆÚ¶ÁÒ»´ÎÕæÊµ´«¸ĞÆ÷²¢×öÈÚºÏ */
 static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
                                  imu_data_t *imu,
                                  float *laser_f_m, bool *laser_f_ok,
@@ -83,7 +83,7 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
              imu->online && imu->yaw_valid && imu->gyro_valid &&
              (imu->state == IMU_STATE_READY);
 
-    /* DT35 å‰/å·¦æ¿€å…‰(ä¸²å£å¸§è§£æå€¼,å•ä½ cm -> m) */
+    /* DT35 Ç°/×ó¼¤¹â(´®¿ÚÖ¡½âÎöÖµ,µ¥Î» cm -> m) */
     *laser_f_m = (float)dt35_link[SENSOR_LINK_F_INDEX].distance_cm * 0.01f;
     *laser_f_ok = (dt35_link[SENSOR_LINK_F_INDEX].online != 0U) &&
                   ((uint32_t)(now_ms -
@@ -100,11 +100,11 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
         PathFusion_Predict(imu->gyro_z_deg_s, dt_s);
     }
 
-    /* ä¸Šä½æœºä½å§¿(0x11 ä½ç½®å¸§,field_w ä¸º yaw_rad;å°ç”µè„‘ä¾§å·²ä¿®å¤,
-     * ä¸å†ä¼ å››å…ƒæ•° W åˆ†é‡)ã€‚
-     * å»é‡:pc_link ä¿å­˜æœ€è¿‘ä¸€å¸§,æœ¬å‡½æ•° 5ms è°ƒä¸€æ¬¡,åŒä¸€å¸§ä¼šè¢«è¯»å¤šæ¬¡,
-     * è‹¥ä¸å»é‡,ä¸­å€¼æ»¤æ³¢çª—å£ä¼šè¢«åŒä¸€ä¸ªè·³å˜å€¼å¡«æ»¡è€Œå¤±å»æ»¤æ³¢æ„ä¹‰,
-     * å› æ­¤åªåœ¨"ä½ç½®å¸§åºå·å˜åŒ–"å³çœŸæ­£æ”¶åˆ°æ–°å¸§æ—¶æ‰èåˆä¸€æ¬¡ã€‚ */
+    /* ÉÏÎ»»úÎ»×Ë(0x11 Î»ÖÃÖ¡,field_w Îª yaw_rad;Ğ¡µçÄÔ²àÒÑĞŞ¸´,
+     * ²»ÔÙ´«ËÄÔªÊı W ·ÖÁ¿)¡£
+     * È¥ÖØ:pc_link ±£´æ×î½üÒ»Ö¡,±¾º¯Êı 5ms µ÷Ò»´Î,Í¬Ò»Ö¡»á±»¶Á¶à´Î,
+     * Èô²»È¥ÖØ,ÖĞÖµÂË²¨´°¿Ú»á±»Í¬Ò»¸öÌø±äÖµÌîÂú¶øÊ§È¥ÂË²¨ÒâÒå,
+     * Òò´ËÖ»ÔÚ"Î»ÖÃÖ¡ĞòºÅ±ä»¯"¼´ÕæÕıÊÕµ½ĞÂÖ¡Ê±²ÅÈÚºÏÒ»´Î¡£ */
     {
         uint32_t pos_seq = PcLink_GetPositionSeq();
         if (PcLink_GetPosition(&upper) &&
@@ -158,7 +158,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
                                   &laser_l, &laser_l_ok);
     PathFusion_Get(&fx, &fy, &fyaw);
 
-    /* ---- å®‰å…¨æ£€æŸ¥(é¡ºåºå³ä¼˜å…ˆçº§) ---- */
+    /* ---- °²È«¼ì²é(Ë³Ğò¼´ÓÅÏÈ¼¶) ---- */
     if (PathFusion_IsUpperLost(now_ms))
     {
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
@@ -180,7 +180,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
         return;
     }
 
-    /* ---- åˆ°è¾¾åˆ¤å®š(åªç”¨èåˆä½å§¿) ---- */
+    /* ---- µ½´ïÅĞ¶¨(Ö»ÓÃÈÚºÏÎ»×Ë) ---- */
     {
         float dx = fx - PATH_GOAL_X_M;
         float dy = fy - PATH_GOAL_Y_M;
@@ -196,14 +196,14 @@ static void runner_step(uint32_t now_ms, float dt_s)
         }
     }
 
-    /* ---- æŸ¥è¡¨(åªè¯»,ä¸ä¿®æ”¹ç¦»çº¿å‰–é¢) ---- */
+    /* ---- ²é±í(Ö»¶Á,²»ĞŞ¸ÄÀëÏßÆÊÃæ) ---- */
     i_near = PathSpeedProfile_Nearest(trajectory, trajectory_count,
                                       fx, fy, last_i_near);
     last_i_near = i_near;
     v_ref = trajectory[i_near].v_ref;
     exp_l = trajectory[i_near].exp_laser_left_m;
 
-    /* ---- çº¯è¿½è¸ª:ç›®æ ‡ç‚¹(å…ˆäºæ¿€å…‰å…œåº•è®¡ç®—,æ¿€å…‰åœè½¦æ—¶éœ€è¦ç›®æ ‡æ–¹å‘) ---- */
+    /* ---- ´¿×·×Ù:Ä¿±êµã(ÏÈÓÚ¼¤¹â¶µµ×¼ÆËã,¼¤¹âÍ£³µÊ±ĞèÒªÄ¿±ê·½Ïò) ---- */
     PathPurePursuit_Find(trajectory, trajectory_count, fx, fy, v_ref,
                          trajectory[i_near].kappa,
                          i_near, &i_target, &tx, &ty);
@@ -213,7 +213,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
         L = 1e-3f;
     }
 
-    /* ---- å‰æ¿€å…‰å…œåº• ---- */
+    /* ---- Ç°¼¤¹â¶µµ× ---- */
     lf = laser_f;
     if (lf > PATH_LASER_MAX_RANGE_M)
     {
@@ -221,8 +221,8 @@ static void runner_step(uint32_t now_ms, float dt_s)
     }
     if (lf <= PATH_LASER_STOP_DIST_M)
     {
-        /* å¼ºåˆ¶ vx=0:ä¿ç•™ç›®æ ‡æ–¹å‘çš„æ¨ªå‘åˆ†é‡åšè„±å›°å¹³ç§»(å…¨å‘è½®å¯ä¾§ç§»)ã€‚
-         * è‹¥ç›®æ ‡å‡ ä¹åœ¨æ­£å‰æ–¹(æ¨ªå‘åˆ†é‡è¿‡å°)åˆ™åŸåœ°ç­‰å¾…,é¿å…é¡¶å¢™ã€‚ */
+        /* Ç¿ÖÆ vx=0:±£ÁôÄ¿±ê·½ÏòµÄºáÏò·ÖÁ¿×öÍÑÀ§Æ½ÒÆ(È«ÏòÂÖ¿É²àÒÆ)¡£
+         * ÈôÄ¿±ê¼¸ºõÔÚÕıÇ°·½(ºáÏò·ÖÁ¿¹ıĞ¡)ÔòÔ­µØµÈ´ı,±ÜÃâ¶¥Ç½¡£ */
         float dir_bx;
         float dir_by;
         float lat_sign;
@@ -247,10 +247,10 @@ static void runner_step(uint32_t now_ms, float dt_s)
                  PATH_REASON_LASER_SLOW : PATH_REASON_RUN;
     }
 
-    /* ---- ä¸–ç•Œç³» -> åº•ç›˜ç³»(å³/å‰),ç›´æ¥å¯¹åº” Chassis_SetVelocity ---- */
+    /* ---- ÊÀ½çÏµ -> µ×ÅÌÏµ(ÓÒ/Ç°),Ö±½Ó¶ÔÓ¦ Chassis_SetVelocity ---- */
     PathWorldToChassis(vx_w, vy_w, fyaw, &vx_c, &vy_c);
 
-    /* ---- å·¦æ¿€å…‰æ¨ªå‘å¾®è°ƒ(err = laser_left - expected_left) ---- */
+    /* ---- ×ó¼¤¹âºáÏòÎ¢µ÷(err = laser_left - expected_left) ---- */
     if ((v_used > 0.0f) && laser_l_ok)
     {
         float err = laser_l - exp_l;
@@ -263,7 +263,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
         {
             trim = -PATH_LAT_TRIM_MAX_MS;
         }
-        /* å·¦å¢™å¤ªè¿‘:å¼ºåˆ¶å‘å³ç¦»å¼€(åº•ç›˜ +x = å‘å³) */
+        /* ×óÇ½Ì«½ü:Ç¿ÖÆÏòÓÒÀë¿ª(µ×ÅÌ +x = ÏòÓÒ) */
         if (laser_l < PATH_LAT_SAFE_M)
         {
             trim = PATH_LAT_TRIM_MAX_MS;
@@ -271,10 +271,10 @@ static void runner_step(uint32_t now_ms, float dt_s)
         vx_c += trim;
     }
 
-    /* ---- èˆªå‘é” ---- */
+    /* ---- º½ÏòËø ---- */
     w_cmd = PathYawLock_Step(fyaw, v_used);
 
-    /* ---- slew-rate é™å¹…(æ¯å‘¨æœŸå˜åŒ–ä¸è¶…è¿‡ max_accel * dt) ---- */
+    /* ---- slew-rate ÏŞ·ù(Ã¿ÖÜÆÚ±ä»¯²»³¬¹ı max_accel * dt) ---- */
     dv_max = PATH_SLEW_XY_ACCEL_MS2 * dt_s;
     dw_max = PATH_SLEW_W_ACCEL_RADS2 * dt_s;
     if ((vx_c - last_cmd_vx) > dv_max) { vx_c = last_cmd_vx + dv_max; }
@@ -287,7 +287,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     last_cmd_vy = vy_c;
     last_cmd_w = w_cmd;
 
-    /* ---- æ•°å€¼é˜²æŠ¤:ä»»ä½•ç¯èŠ‚äº§ç”Ÿ NaN/Inf ç«‹å³å®‰å…¨åœè½¦ ---- */
+    /* ---- ÊıÖµ·À»¤:ÈÎºÎ»·½Ú²úÉú NaN/Inf Á¢¼´°²È«Í£³µ ---- */
     if (!num_ok(vx_c) || !num_ok(vy_c) || !num_ok(w_cmd) ||
         !num_ok(v_ref) || !num_ok(v_used))
     {
@@ -295,13 +295,13 @@ static void runner_step(uint32_t now_ms, float dt_s)
         return;
     }
 
-    /* ---- è¾“å‡º:åº•ç›˜ç³»(å³/å‰) -> Chassis_SetVelocity(vx=å³, vy=å‰, z=CCW) ---- */
+    /* ---- Êä³ö:µ×ÅÌÏµ(ÓÒ/Ç°) -> Chassis_SetVelocity(vx=ÓÒ, vy=Ç°, z=CCW) ---- */
     rpm_x = (int16_t)roundf(vx_c * PATH_RPM_PER_M_S);
     rpm_y = (int16_t)roundf(vy_c * PATH_RPM_PER_M_S);
     z = (int16_t)roundf(w_cmd * PATH_Z_PER_RAD_S);
     (void)Chassis_SetVelocity(rpm_x, rpm_y, z);
 
-    /* ---- è°ƒè¯•ä¿¡æ¯ ---- */
+    /* ---- µ÷ÊÔĞÅÏ¢ ---- */
     debug.i_near = i_near;
     debug.i_target = i_target;
     debug.v_ref = v_ref;
@@ -337,7 +337,7 @@ void PathRunner_Run(void)
     uint32_t now_ms = HAL_GetTick();
     float dt_s;
 
-    /* æ§åˆ¶å‘¨æœŸåˆ†é¢‘(commTask 1ms è°ƒç”¨) */
+    /* ¿ØÖÆÖÜÆÚ·ÖÆµ(commTask 1ms µ÷ÓÃ) */
     if ((uint32_t)(now_ms - last_step_ms) < PATH_CONTROL_PERIOD_MS)
     {
         return;
@@ -352,7 +352,7 @@ void PathRunner_Run(void)
     switch (state)
     {
     case PATH_STATE_INIT:
-        /* å…³é—­ IMU æ¨¡å—è‡ªå¸¦èˆªå‘ä¿æŒ,é¿å…å®ƒè¦†ç›–æœ¬æ¨¡å—çš„ z æŒ‡ä»¤ */
+        /* ¹Ø±Õ IMU Ä£¿é×Ô´øº½Ïò±£³Ö,±ÜÃâËü¸²¸Ç±¾Ä£¿éµÄ z Ö¸Áî */
         ImuMain_EnableYawHold(false);
         state = PATH_STATE_CALIB;
         state_start_ms = now_ms;
@@ -375,7 +375,7 @@ void PathRunner_Run(void)
                 reason = PATH_REASON_WAIT_START;
             }
         }
-        /* IMU å¼‚å¸¸å…œåº•:æ ‡å®šè¶…æ—¶ä¹Ÿç»§ç»­(é›¶åæŒ‰ 0 å¤„ç†) */
+        /* IMU Òì³£¶µµ×:±ê¶¨³¬Ê±Ò²¼ÌĞø(ÁãÆ«°´ 0 ´¦Àí) */
         if ((uint32_t)(now_ms - state_start_ms) > 5000U)
         {
             state = PATH_STATE_WAIT_START;
@@ -397,7 +397,7 @@ void PathRunner_Run(void)
         (void)runner_read_and_fuse(now_ms, dt_s, &imu,
                                    &laser_f, &lf_ok, &laser_l, &ll_ok);
 
-        /* èµ·ç‚¹ç”±ä¸Šç”µä½å§¿è¦†ç›–(ä¸ yaml èµ·ç‚¹å·® 1m ä»¥å†…æ‰æ¥å—) */
+        /* ÆğµãÓÉÉÏµçÎ»×Ë¸²¸Ç(Óë yaml Æğµã²î 1m ÒÔÄÚ²Å½ÓÊÜ) */
         {
             pc_position_t upper;
             if (PcLink_GetPosition(&upper) &&
@@ -417,7 +417,7 @@ void PathRunner_Run(void)
         }
         if ((uint32_t)(now_ms - state_start_ms) > PATH_WAIT_START_MS)
         {
-            /* è¶…æ—¶:ç”¨ yaml å ä½èµ·ç‚¹ */
+            /* ³¬Ê±:ÓÃ yaml Õ¼Î»Æğµã */
             state = PATH_STATE_BUILD;
             state_start_ms = now_ms;
         }
@@ -436,7 +436,7 @@ void PathRunner_Run(void)
             runner_stop(PATH_REASON_STOP_BUILD);
             break;
         }
-        /* æ¨ç¦» + å¹³æ»‘è¿­ä»£,å¹¶é‡ç®—å¼§é•¿/æ›²ç‡(é¿å…ç‚¹çŠ¶å¤–æ¨æ’•è£‚æ‹è§’) */
+        /* ÍÆÀë + Æ½»¬µü´ú,²¢ÖØËã»¡³¤/ÇúÂÊ(±ÜÃâµã×´ÍâÍÆËºÁÑ¹Õ½Ç) */
         PathSpline_Finalize(trajectory, trajectory_count, &inflated_map);
         if (!PathSpeedProfile_Build(trajectory, trajectory_count, &real_map))
         {
@@ -462,16 +462,16 @@ void PathRunner_Run(void)
         break;
     }
 
-    /* è°ƒè¯•ä¿¡æ¯å…¬å…±éƒ¨åˆ† */
+    /* µ÷ÊÔĞÅÏ¢¹«¹²²¿·Ö */
     debug.state = state;
     debug.reason = reason;
     PathFusion_GetStats(&debug.fusion_xy_rejects, &debug.fusion_yaw_rejects,
                         &debug.upper_frames);
     PcLink_GetStats(&debug.pc_frames, &debug.crc_errors);
 
-    /* å›ä¼ å°ç”µè„‘çŠ¶æ€å¸§(55 AA 20 | state | error):
-     * state = è§„åˆ’å™¨çŠ¶æ€æœº;error = åœæ­¢åŸå› (STOPPED æ—¶),æ­£å¸¸ä¸º 0ã€‚
-     * ä¸Šä½æœºç«äº‰ç½‘å…³ç”¨è¯¥å¸§åˆ¤æ–­æ§åˆ¶å™¨åœ¨çº¿(500ms æœªæ”¶åˆ°åˆ¤ç¦»çº¿)ã€‚ */
+    /* »Ø´«Ğ¡µçÄÔ×´Ì¬Ö¡(55 AA 20 | state | error):
+     * state = ¹æ»®Æ÷×´Ì¬»ú;error = Í£Ö¹Ô­Òò(STOPPED Ê±),Õı³£Îª 0¡£
+     * ÉÏÎ»»ú¾ºÕùÍø¹ØÓÃ¸ÃÖ¡ÅĞ¶Ï¿ØÖÆÆ÷ÔÚÏß(500ms Î´ÊÕµ½ÅĞÀëÏß)¡£ */
     PcLink_SetStatus((uint8_t)state,
                      (state == PATH_STATE_STOPPED) ? (uint8_t)reason : 0U);
 
@@ -494,7 +494,7 @@ void PathRunner_GetDebug(path_debug_t *out)
 
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count)
 {
-    /* åªè¦ç¦»çº¿è½¨è¿¹æ„å»ºå®Œæˆå°±è¿”å›(BUILD/RUN/ARRIVED/STOPPED å‡å¯) */
+    /* Ö»ÒªÀëÏß¹ì¼£¹¹½¨Íê³É¾Í·µ»Ø(BUILD/RUN/ARRIVED/STOPPED ¾ù¿É) */
     if (trajectory_count > 0U)
     {
         if (count != NULL)
@@ -546,7 +546,7 @@ static void dbg_putf(UART_HandleTypeDef *uart, float v)
     dbg_puts(uart, buf);
 }
 
-/* æ¯ 400ms ä¸€è¡Œ:
+/* Ã¿ 400ms Ò»ĞĞ:
  * t_ms,state,reason,x,y,yaw,vx,vy,w,v_ref,v_used,laserF,laserL,crc */
 void PathRunner_DebugDump(UART_HandleTypeDef *uart)
 {

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    path_geometry.c
- * @brief   å‡ ä½•å·¥å…·å®ç°:å¢™ / è·ç¦»åœº / å°„çº¿æŠ•å°„ / åæ ‡å˜æ¢
+ * @brief   ¼¸ºÎ¹¤¾ßÊµÏÖ:Ç½ / ¾àÀë³¡ / ÉäÏßÍ¶Éä / ×ø±ê±ä»»
  ******************************************************************************
  */
 #include "path_geometry.h"
@@ -9,13 +9,13 @@
 #include <math.h>
 #include <stddef.h>
 
-/* field.yaml walls æ®µ(wall_A å·²æ³¨é‡Š,æœªå¯ç”¨) */
+/* field.yaml walls ¶Î(wall_A ÒÑ×¢ÊÍ,Î´ÆôÓÃ) */
 static const path_wall_t real_walls[PATH_WALL_COUNT] =
 {
     PATH_WALLS_TABLE
 };
 
-/* è†¨èƒ€å¢™é™æ€ç¼“å†² */
+/* ÅòÕÍÇ½¾²Ì¬»º³å */
 static path_wall_t inflated_walls[PATH_WALL_COUNT];
 
 void PathGridMap_BuildReal(path_gridmap_t *map)
@@ -40,7 +40,7 @@ void PathGridMap_BuildInflated(path_gridmap_t *map)
 
     for (i = 0U; i < PATH_WALL_COUNT; i++)
     {
-        /* çŸ©å½¢è†¨èƒ€:yaw é”å®šä¸‹æœºå™¨äººä¸ºè½´å¯¹é½çŸ©å½¢ */
+        /* ¾ØĞÎÅòÕÍ:yaw Ëø¶¨ÏÂ»úÆ÷ÈËÎªÖá¶ÔÆë¾ØĞÎ */
         inflated_walls[i].xmin = real_walls[i].xmin - PATH_INFLATE_DX_M;
         inflated_walls[i].ymin = real_walls[i].ymin - PATH_INFLATE_DY_M;
         inflated_walls[i].xmax = real_walls[i].xmax + PATH_INFLATE_DX_M;
@@ -73,7 +73,7 @@ static float wall_dist_to(const path_wall_t *w, float x, float y)
     return sqrtf(dx * dx + dy * dy);
 }
 
-/* AABB å°„çº¿ç›¸äº¤(Slab æ³•),æ–¹å‘ä¸ºå•ä½å‘é‡ */
+/* AABB ÉäÏßÏà½»(Slab ·¨),·½ÏòÎªµ¥Î»ÏòÁ¿ */
 static float wall_ray_cast(const path_wall_t *w,
                            float ox, float oy,
                            float dx, float dy,
@@ -89,7 +89,7 @@ static float wall_ray_cast(const path_wall_t *w,
 
     if (fabsf(dx) < 1e-9f)
     {
-        /* å°„çº¿å¹³è¡Œäº y è½´æ–¹å‘åˆ†é‡:è‹¥åŸç‚¹åœ¨å¢™ x èŒƒå›´å¤–åˆ™ä¸ç›¸äº¤ */
+        /* ÉäÏßÆ½ĞĞÓÚ y Öá·½Ïò·ÖÁ¿:ÈôÔ­µãÔÚÇ½ x ·¶Î§ÍâÔò²»Ïà½» */
         if ((ox < w->xmin) || (ox > w->xmax))
         {
             return max_range;
@@ -215,7 +215,7 @@ float PathGridMap_RayCast(const path_gridmap_t *map,
     return best;
 }
 
-/* æ‰¾åˆ°åŒ…å«è¯¥ç‚¹çš„å¢™(ç‚¹å¿…é¡»ç¡®å®åœ¨æŸå¢™å†…),æ²¿æœ€å°ç©¿é€è½´æ¨å‡º */
+/* ÕÒµ½°üº¬¸ÃµãµÄÇ½(µã±ØĞëÈ·ÊµÔÚÄ³Ç½ÄÚ),ÑØ×îĞ¡´©Í¸ÖáÍÆ³ö */
 static bool push_out_one(const path_gridmap_t *map, float *x, float *y,
                          float step_m)
 {
@@ -245,7 +245,7 @@ static bool push_out_one(const path_gridmap_t *map, float *x, float *y,
         if (dy_bottom < min_pen) { min_pen = dy_bottom; }
         if (dy_top < min_pen) { min_pen = dy_top; }
 
-        /* æ²¿ç©¿é€æœ€å°çš„æ–¹å‘,æ¨å‡ºåˆ°å¢™å¤–å†ç•™ä¸€æ­¥ä½™é‡ */
+        /* ÑØ´©Í¸×îĞ¡µÄ·½Ïò,ÍÆ³öµ½Ç½ÍâÔÙÁôÒ»²½ÓàÁ¿ */
         if (min_pen == dx_left)
         {
             *x = w->xmin - margin;
@@ -302,7 +302,7 @@ float PathWrapAngle(float angle_rad)
 void PathBodyToWorld(float vx_b, float vy_b, float yaw_user,
                      float *vx_w, float *vy_w)
 {
-    /* Î¸ = yaw + Ï€/2:yaw=0(æœ +y)æ—¶è½¦ä½“ +x åº”æŒ‡å‘ä¸–ç•Œ +y */
+    /* ¦È = yaw + ¦Ğ/2:yaw=0(³¯ +y)Ê±³µÌå +x Ó¦Ö¸ÏòÊÀ½ç +y */
     float theta = yaw_user + (float)(PATH_PI / 2.0);
     float c = cosf(theta);
     float s = sinf(theta);
@@ -325,7 +325,7 @@ void PathWorldToBody(float vx_w, float vy_w, float yaw_user,
 void PathWorldToChassis(float vx_w, float vy_w, float yaw_user,
                         float *vx_c, float *vy_c)
 {
-    /* åº•ç›˜ç³» x=å³ã€y=å‰,æ°ä¸ºä¸–ç•Œç³»æ—‹è½¬ yaw(è½¦ä½“ç³»å†è½¬ -90Â°) */
+    /* µ×ÅÌÏµ x=ÓÒ¡¢y=Ç°,Ç¡ÎªÊÀ½çÏµĞı×ª yaw(³µÌåÏµÔÙ×ª -90¡ã) */
     float c = cosf(yaw_user);
     float s = sinf(yaw_user);
 
@@ -348,11 +348,11 @@ void PathLaserRay(float robot_x, float robot_y, float yaw_user,
                   float dir_body_x, float dir_body_y,
                   float *ox, float *oy, float *dx, float *dy)
 {
-    /* æŒ‚è½½ç‚¹:è½¦ä½“ç³» -> ä¸–ç•Œç³»(R(yaw+Ï€/2)) */
+    /* ¹ÒÔØµã:³µÌåÏµ -> ÊÀ½çÏµ(R(yaw+¦Ğ/2)) */
     PathBodyToWorld(mount_body_x, mount_body_y, yaw_user, ox, oy);
     *ox += robot_x;
     *oy += robot_y;
 
-    /* æœå‘:åŒå˜æ¢ä½œç”¨äºå•ä½æ–¹å‘å‘é‡ */
+    /* ³¯Ïò:Í¬±ä»»×÷ÓÃÓÚµ¥Î»·½ÏòÏòÁ¿ */
     PathBodyToWorld(dir_body_x, dir_body_y, yaw_user, dx, dy);
 }
