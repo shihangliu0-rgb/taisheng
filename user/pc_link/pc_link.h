@@ -9,6 +9,7 @@
  *   感知帧 44B: AA 55 | 10 | seq | flags | red_xyz | blue_xyz | ball_xyz
  *              (9 个 float,IEEE754 小端) | checksum | 0D 0A
  *   位置帧 24B: AA 55 | 11 | seq | flags | field_xyz | field_w | checksum | 0D 0A
+ *     (field_w = yaw 角,单位 rad,用户约定 yaw=0 朝 +y;非四元数 w 分量)
  *   STM32 -> 上位机(>=10Hz):
  *   状态帧  8B: 55 AA | 20 | state | error | checksum | 0D 0A
  *

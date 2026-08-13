@@ -88,6 +88,7 @@ typedef enum
     PATH_REASON_STOP_BUILD,        /* 离线轨迹生成失败 */
     PATH_REASON_STOP_NUMERIC,      /* 数值异常(NaN/Inf)防护停车 */
     PATH_REASON_STOP_MOTOR_LOST,   /* 任一底盘电机离线 */
+    PATH_REASON_STOP_HEADING,      /* 起步朝向超出 ±30 度硬约束 */
     PATH_REASON_STOP_TIMEOUT       /* 全程超时 */
 } path_reason_t;
 

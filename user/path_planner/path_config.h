@@ -53,6 +53,10 @@
 /* ==================================================================
  * 2. 场地几何(field.yaml: field / walls)
  * ================================================================== */
+/* 注意(P2-3):若场地 D 拐角处有圆形障碍(审计假设 R0.28@(2.55,1.95)),
+ * 实测几何后在此追加一堵轴对齐近似墙并 +1 PATH_WALL_COUNT,例如:
+ *   {2.27f, 1.67f, 2.83f, 2.23f},   // D 圆外接矩形近似
+ * 当前墙表未建模该障碍(仿真 S9 靠激光兜底侥幸通过,不可依赖)。 */
 #define PATH_FIELD_W_M                11.0f
 #define PATH_FIELD_H_M                6.0f
 #define PATH_WALL_THICKNESS_M         0.049f
@@ -100,15 +104,18 @@
     {0.50f, 1.00f},   /* 起点(占位,上电覆盖) */        \
     {1.00f, 1.65f},   /* 通道1 左入口 */               \
     {2.00f, 1.65f},   /* 通道1 中段 */                 \
-    {2.45f, 1.65f},   /* D角圆弧起点(顶点x=3.10) */    \
-    {2.70f, 1.70f},   /* D角圆弧点1(R=0.65) */         \
+    {2.45f, 1.65f},   /* D角圆弧起点(R=0.65 fillet) */ \
+    {2.70f, 1.70f},   /* D角圆弧点1 */                 \
     {2.91f, 1.84f},   /* D角圆弧点2 */                 \
-    {3.05f, 2.05f},   /* D角圆弧点3 */                 \
-    {3.10f, 2.30f},   /* D角圆弧终点 */                \
-    {1.00f, 2.60f},   /* 通道2 左段 */                 \
-    {0.375f, 2.60f},  /* 墙C西侧缺口入口(贴墙,窄通道) */ \
-    {0.375f, 3.55f},  /* 缺口出口(墙C膨胀区之上) */    \
-    {0.50f, 3.70f}    /* 终点 */
+    {3.05f, 2.10f},   /* D角圆弧点3 */                 \
+    {3.05f, 2.45f},   /* D角圆弧终点 */                \
+    {1.00f, 2.65f},   /* 通道2 左段(2.65:远离墙B) */   \
+    {0.55f, 2.50f},   /* 缺口转弯过渡点(下探,给纯追踪切角留余量) */ \
+    {0.34f, 2.45f},   /* 墙C西侧缺口入口:走 x=0.34(左侧余 7cm,
+                          右侧余 14cm,把切角余量留宽一倍);直角弯在
+                          y<2.75 完成,否则扫到 wall_C 西南角(0.7,3.075) */ \
+    {0.34f, 3.70f}    /* 终点:缺口列直行北上,距目标(0.5,3.7)
+                          0.16m(略超 0.15 容差,靠到达判定在途中触发) */
 
 #define PATH_GOAL_X_M                 0.50f
 #define PATH_GOAL_Y_M                 3.70f
@@ -116,6 +123,12 @@
 /* 上电后等待上位机位姿的时间,超时用 yaml 起点 */
 /* 上位机给出的起点与 wp[0] 距离超过该值则拒绝(不推进状态,继续等待) */
 #define PATH_START_OVERRIDE_MAX_M     1.0f
+/* 起步朝向硬约束(P0-1):本任务物理前提是上电 yaw=0 朝 +y。
+ * WAIT_START 收到首帧有效位姿后检查 |field_w|,超过该值直接
+ * STOP_HEADING(比"yaw 门限锁死后全速撞墙"安全) */
+#define PATH_START_YAW_LIMIT_DEG      30.0f
+/* CALIB 总超时(P1-5):IMU 未插/静默时不能永远卡在 CALIB */
+#define PATH_CALIB_TIMEOUT_MS         10000U
 
 /* ==================================================================
  * 5. B 样条(field.yaml: bspline)
@@ -125,22 +138,16 @@
 /* 把落入膨胀墙的采样点沿距离场梯度外推 */
 #define PATH_PUSH_STEP_M              0.02f
 #define PATH_PUSH_MAX_ITERS           60U
-/* 推离 + 平滑的迭代轮数与平滑窗口:点状外推会撕裂拐角,
- * 交替执行"推离 -> 移动平均"让路径收敛成绕墙圆角 */
+/* 推离 + 拉普拉斯平滑交替迭代轮数 */
 #define PATH_PUSH_SMOOTH_ROUNDS       4U
-#define PATH_SMOOTH_WINDOW            7U
-/* 最小转弯半径:yaw 锁定的矩形车身平移过弯时,中心轨迹的转弯圆弧必须
- * 与墙角保持"半对角线 + 余量"距离,否则车头内角会扫过墙角(前激光安装在
- * 前部中央,覆盖不到前角,这是真实盲区,只能靠路径保证)。
- * 拐角 D 处按切向圆弧几何推导,R >= 0.648 才能留够 0.40m 墙角距离,
- * 取 0.65。超限段直接替换为与入/出切线相切的圆弧(确定性整形)。 */
-#define PATH_MIN_TURN_RADIUS_M        0.65f
+/* 弯道半径:拐角 D 由路点表内 R=0.65 fillet 采样点保证(见路点注释)。
+ * 墙C缺口(x<0.7 的 5cm 窄通道)几何上无法做 0.65m 半径,由曲率限速
+ * (v^2*|k| <= a_lat)+ 曲率自适应前视保证跟踪精度。 */
 #define PATH_SAMPLE_STEP_MAX_M        0.15f   /* 最大采样点间距 */
-#define PATH_MIN_CLEARANCE_M          0.0005f /* 中心路径到膨胀墙的最小净距:
-                                                  推离保证"墙外",净距下限仅防接触;
-                                                  线段中点校验兜底防穿越 */
-#define PATH_KAPPA_HARD_MAX           25.0f   /* 验收硬上限(R=0.04):墙C缺口几何上无法
-                                                 做大半径,靠曲率自适应前视保证跟踪精度 */
+#define PATH_MIN_CLEARANCE_M          0.02f   /* 中心路径到硬膨胀墙的最小净距 */
+#define PATH_KAPPA_HARD_MAX           50.0f   /* 验收硬上限(R=0.02):缺口窄 S 弯的
+                                                 固有尖峰,由速度剖面强制
+                                                 v<=sqrt(a_lat/|k|) 低速通过 */
 #define PATH_LAT_ACC_TOL              1.20f   /* 横向加速度超限容差 */
 #define PATH_BUILD_MAX_ATTEMPTS       3U      /* 整形+验收的最大尝试次数 */
 #define PATH_REQUIRE_MOTORS           1U      /* 任一电机离线 -> 停车 */
@@ -165,17 +172,22 @@
                                                  正常运动远低于该门限) */
 #define PATH_FUSION_YAW_GATE_DEG      20.0f   /* yaw 与预测差 >20° 拒绝 */
 #define PATH_FUSION_YAW_GAIN          0.15f   /* yaw 低通拉回增益 */
-#define PATH_FUSION_UPPER_TIMEOUT_MS  500U    /* 上位机丢失判定 */
+#define PATH_FUSION_UPPER_TIMEOUT_MS  500U    /* 链路丢失判定(CRC 有效帧刷新) */
 #define PATH_FUSION_CALIB_SAMPLES     200U    /* 静止标定采样帧数(约1s) */
+/* 数据可用性(通过 15cm/20 度门限才刷新):可用数据年龄超过
+ * DEGRADE_MS 限速到 DEGRADE_V_MS,超过 DATA_STOP_MS 判定定位不可用停机 */
+#define PATH_UPPER_DEGRADE_MS         100U   /* 5 帧缺失即降速(P1-1:盲开窗口 <=100ms) */
+#define PATH_UPPER_DEGRADE_V_MS       0.30f
+#define PATH_UPPER_DATA_STOP_MS       800U
 #define PATH_GYRO_SIGN                1.0f    /* IMU z 轴与 yaw 反向时改 -1 */
 
 /* ==================================================================
  * 8. 纯追踪(原 pure_pursuit.py)
  * ================================================================== */
-#define PATH_LD_MIN_M                 0.20f
-#define PATH_LD_K_S                   0.15f
+#define PATH_LD_MIN_M                 0.15f
+#define PATH_LD_K_S                   0.12f
 /* 曲率自适应前视上限:急弯处缩短前视距离,防止纯追踪抄近道切墙 */
-#define PATH_LD_KAPPA_MAX_M           0.22f
+#define PATH_LD_KAPPA_MAX_M           0.15f
 #define PATH_SEARCH_WINDOW            150U    /* 前向最近点搜索窗口 */
 #define PATH_SEARCH_BACK_WINDOW       10U     /* 允许回退窗口(防过冲卡死) */
 
@@ -196,6 +208,9 @@
  * ================================================================== */
 #define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制 vx=0(停车,不横移) */
 #define PATH_LASER_MAX_RANGE_M        0.20f   /* 真实 DT35 量程 5-20cm(固件钳位) */
+/* 无回波行为(P1-3):若实测 DT35 无回波上报 0cm,置 1 把 0 视为超程无障碍;
+ * 若实测无回波上报 20cm(钳位)则本开关无效。以台架实测为准。 */
+#define PATH_LASER_NO_ECHO_FREE       1U
 #define PATH_LASER_TIMEOUT_MS         500U    /* 与 dt35_pnp_link 的离线判据一致 */
 #define PATH_STOP_ON_LASER_LOSS       1U      /* 前激光离线 -> 停车 */
 /* 横向微调:err = laser_left - expected_left[i],叠加在底盘 x(向右)上 */

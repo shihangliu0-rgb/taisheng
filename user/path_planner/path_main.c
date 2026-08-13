@@ -7,7 +7,8 @@
  *
  *   INIT       -> 关闭 IMU 模块自带航向保持(本模块用自己的 yaw-lock)
  *   CALIB      -> 静止采 IMU 陀螺零偏(ImuMain_GetData,200 帧约 1s)
- *   WAIT_START -> 读小电脑 0x11 位置帧(PcLink_GetPosition)覆盖起点,最长等 3s
+ *   WAIT_START -> 读小电脑 0x11 位置帧(PcLink_GetPosition)覆盖起点;
+ *                 起步朝向 |yaw|>30 度直接 STOP_HEADING(任务前提:朝 +y 起步)
  *   BUILD      -> 路点(path_config.h)-> B 样条 -> 离墙外推 + 最小转弯半径整形
  *                 -> 速度剖面(曲率限速 + 双向扫描)+ 前/左激光期望距离表
  *   RUN(5ms)   -> 1) IMU 陀螺积分预测 yaw
@@ -24,8 +25,11 @@
  *                 8) 左激光横向微调(仅当期望距离在量程内)+ yaw-lock 出 w
  *                    + slew-rate 限幅 + 电机在线检查
  *   ARRIVED    -> 距终点 0.15m 内停车(刹车锁存)
- *   STOPPED    -> 位姿丢失/从未收到位姿 / IMU 离线 / 前激光<12cm /
- *                 电机离线 / NaN / 20s 超时 均停车(显式 SET_BRAKE)
+ *   降级策略  -> 可用数据年龄>300ms 限速 0.3m/s,>800ms 判定定位不可用停机;
+ *                 链路存活按 CRC 有效帧刷新(被门限拒绝的帧不触发链路超时)
+ *   STOPPED    -> 位姿丢失/从未收到位姿 / 起步朝向超限 / IMU 离线(含 10s
+ *                 校准超时) / 前激光<12cm / 电机离线 / NaN / 20s 超时
+ *                 均停车(显式 SET_BRAKE);终态只停一次,之后手动可接管
  *
  * 同时通过 PcLink_SetStatus 回传 0x20 状态帧,小电脑据此判断控制器在线。
  ******************************************************************************
@@ -1088,7 +1092,8 @@ typedef struct
     float yaw;                 /* 用户约定 yaw:0 朝 +y,CCW 为正 */
     float zero_offset_deg_s;   /* 静止标定得到的附加陀螺零偏 */
     bool have_upper;
-    uint32_t last_upper_ms;
+    uint32_t last_upper_ms;    /* 链路存活:任何 CRC 有效位置帧都刷新 */
+    uint32_t last_data_ms;     /* 数据可用:通过门限的帧才刷新 */
     uint16_t calib_count;
     float calib_sum;
 
@@ -1162,40 +1167,69 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         }
     }
 
-    /* yaw 门限(与积分预测差 >20° 拒绝 yaw 分量,xy 照常融合) */
-    yaw_err_rad = fabsf(PathWrapAngle(yaw_rad - fusion.yaw));
-    if (fusion.have_upper &&
-        (yaw_err_rad > PATH_FUSION_YAW_GATE_DEG * DEG2RAD))
+    /* 首帧:yaw 全量初始化(P0-1 修复)。原先 0.15 增益会把手帧
+     * yaw=π(朝 -y)折叠成 0.47rad,后续帧与估计值差 2.67rad 远超
+     * 20 度门限 -> 每一帧都被拒,yaw 锁死导致全速朝错误方向行驶。 */
+    if (!fusion.have_upper)
     {
-        fusion.yaw_rejects++;
+        fusion.yaw = yaw_rad;
     }
     else
     {
-        /* yaw 低通拉回 */
-        fusion.yaw += PATH_FUSION_YAW_GAIN *
-                      PathWrapAngle(yaw_rad - fusion.yaw);
+        /* yaw 门限(与估计值差 >20° 拒绝 yaw 分量,xy 照常融合) */
+        yaw_err_rad = fabsf(PathWrapAngle(yaw_rad - fusion.yaw));
+        if (yaw_err_rad > PATH_FUSION_YAW_GATE_DEG * DEG2RAD)
+        {
+            fusion.yaw_rejects++;
+        }
+        else
+        {
+            /* yaw 低通拉回 */
+            fusion.yaw += PATH_FUSION_YAW_GAIN *
+                          PathWrapAngle(yaw_rad - fusion.yaw);
+        }
     }
 
-    /* xy 直接覆盖;只有通过全部校验的帧才更新时间戳 */
+    /* xy 直接覆盖;只有通过全部校验的帧才刷新"数据时间";
+     * "链路时间"由 PathFusion_TouchLink 在收到任何 CRC 有效帧时刷新,
+     * 两者分离:跳变帧被门限拒绝不会触发链路超时,但长时间无可用
+     * 数据会触发降速/停机(见 DataAge 使用处) */
     fusion.x = x_m;
     fusion.y = y_m;
     fusion.have_upper = true;
-    fusion.last_upper_ms = now_ms;
+    fusion.last_data_ms = now_ms;
     fusion.upper_frames++;
 
     return true;
 }
 
+/* 收到任何 CRC 有效的位置帧即刷新链路存活时间(P1-2 修复:
+ * 被 15cm/20 度门限拒绝的帧仍证明链路健康,不应触发 STOP_UPPER_LOST) */
+static void PathFusion_TouchLink(uint32_t now_ms)
+{
+    fusion.last_upper_ms = now_ms;
+}
+
 static bool PathFusion_IsUpperLost(uint32_t now_ms)
 {
-    /* 修复:从未收到位姿时一律视为"未就绪/丢失",
-     * 禁止把无数据当成健康状态继续运动 */
+    /* 从未收到位姿视为"未就绪/丢失",禁止把无数据当成健康状态 */
     if (!fusion.have_upper)
     {
         return true;
     }
     return (uint32_t)(now_ms - fusion.last_upper_ms) >
            PATH_FUSION_UPPER_TIMEOUT_MS;
+}
+
+/* 最近一次"被接受"数据的年龄(ms):连续跳变/噪声导致数据长期被拒时
+ * 该值持续增长,用于降速与定位不可用停机 */
+static uint32_t PathFusion_DataAge(uint32_t now_ms)
+{
+    if (!fusion.have_upper)
+    {
+        return 0xFFFFFFFFU;
+    }
+    return now_ms - fusion.last_data_ms;
 }
 
 static bool PathFusion_HasUpper(void)
@@ -1496,13 +1530,23 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
              imu->online && imu->yaw_valid && imu->gyro_valid &&
              (imu->state == IMU_STATE_READY);
 
-    /* DT35 前/左激光(串口帧解析值,单位 cm -> m) */
+    /* DT35 前/左激光(串口帧解析值,单位 cm -> m)。
+     * 无回波=0(P1-3):按配置视为超程无障碍;若台架实测无回波上报
+     * 20cm(钳位),把 PATH_LASER_NO_ECHO_FREE 置 0 */
     *laser_f_m = (float)dt35_link[SENSOR_LINK_F_INDEX].distance_cm * 0.01f;
+    if ((PATH_LASER_NO_ECHO_FREE != 0U) && (*laser_f_m <= 0.001f))
+    {
+        *laser_f_m = PATH_LASER_MAX_RANGE_M;
+    }
     *laser_f_ok = (dt35_link[SENSOR_LINK_F_INDEX].online != 0U) &&
                   ((uint32_t)(now_ms -
                    dt35_link[SENSOR_LINK_F_INDEX].last_rx_ms) <
                    PATH_LASER_TIMEOUT_MS);
     *laser_l_m = (float)dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm * 0.01f;
+    if ((PATH_LASER_NO_ECHO_FREE != 0U) && (*laser_l_m <= 0.001f))
+    {
+        *laser_l_m = PATH_LASER_MAX_RANGE_M;
+    }
     *laser_l_ok = (dt35_link[SENSOR_LINK_L_B_INDEX].online != 0U) &&
                   ((uint32_t)(now_ms -
                    dt35_link[SENSOR_LINK_L_B_INDEX].last_rx_ms) <
@@ -1520,13 +1564,17 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
      * 因此只在"位置帧序号变化"即真正收到新帧时才融合一次。 */
     {
         uint32_t pos_seq = PcLink_GetPositionSeq();
-        if (PcLink_GetPosition(&upper) &&
-            ((upper.flags & PC_LINK_FLAG_FIELD_VALID) != 0U) &&
-            (pos_seq != last_pc_frame_count))
+        if (pos_seq != last_pc_frame_count)
         {
             last_pc_frame_count = pos_seq;
-            (void)PathFusion_UpdateUpper(upper.field_x_m, upper.field_y_m,
-                                         upper.field_w, now_ms);
+            /* CRC 有效帧即刷新链路存活(P1-2) */
+            PathFusion_TouchLink(now_ms);
+            if (PcLink_GetPosition(&upper) &&
+                ((upper.flags & PC_LINK_FLAG_FIELD_VALID) != 0U))
+            {
+                (void)PathFusion_UpdateUpper(upper.field_x_m, upper.field_y_m,
+                                             upper.field_w, now_ms);
+            }
         }
     }
 
@@ -1572,6 +1620,13 @@ static void runner_step(uint32_t now_ms, float dt_s)
     PathFusion_Get(&fx, &fy, &fyaw);
     /* ---- 安全检查(顺序即优先级) ---- */
     if (!PathFusion_HasUpper() || PathFusion_IsUpperLost(now_ms))
+    {
+        runner_stop(PATH_REASON_STOP_UPPER_LOST);
+        return;
+    }
+    /* 数据可用性降级(P1-1/P1-2):可用数据年龄 >800ms = 定位不可用停机;
+     * >300ms = 降速 0.3m/s(链路尚活但数据连续被拒,先慢行) */
+    if (PathFusion_DataAge(now_ms) > PATH_UPPER_DATA_STOP_MS)
     {
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
@@ -1633,6 +1688,15 @@ static void runner_step(uint32_t now_ms, float dt_s)
     last_i_near = i_near;
     v_ref = trajectory[i_near].v_ref;
     exp_l = trajectory[i_near].exp_laser_left_m;
+
+    /* 数据降级限速(在查表后、激光兜底前统一钳制) */
+    if (PathFusion_DataAge(now_ms) > PATH_UPPER_DEGRADE_MS)
+    {
+        if (v_ref > PATH_UPPER_DEGRADE_V_MS)
+        {
+            v_ref = PATH_UPPER_DEGRADE_V_MS;
+        }
+    }
 
     /* ---- 纯追踪:目标点(先于激光兜底计算,激光停车时需要目标方向) ---- */
     PathPurePursuit_Find(trajectory, trajectory_count, fx, fy, v_ref,
@@ -1810,11 +1874,14 @@ void PathRunner_Run(void)
                 reason = PATH_REASON_WAIT_START;
             }
         }
-        /* 修复(审计 P0-4):真实 IMU 启动约 4.4s 才开始零偏采样,
-         * 固定 5s 超时会让规划器在 IMU 就绪前误报 STOP_IMU_LOST。
-         * 现在 CALIB 无条件等待 IMU_STATE_READY(保持未布防);
-         * 仅当 IMU 明确进入 ERROR 状态才停机。 */
+        /* 等待 IMU_STATE_READY(真实 IMU 约 4.4s 才开始零偏采样,
+         * 不能用固定短超时);总超时 10s 防"IMU 未插/静默"永久卡死 */
         if (imu.state == IMU_STATE_ERROR)
+        {
+            runner_stop(PATH_REASON_STOP_IMU_LOST);
+            break;
+        }
+        if ((uint32_t)(now_ms - state_start_ms) > PATH_CALIB_TIMEOUT_MS)
         {
             runner_stop(PATH_REASON_STOP_IMU_LOST);
         }
@@ -1846,6 +1913,14 @@ void PathRunner_Run(void)
                 float dx = upper.field_x_m - waypoints[0].x_m;
                 float dy = upper.field_y_m - waypoints[0].y_m;
                 last_pc_frame_count = pos_seq;
+                PathFusion_TouchLink(now_ms);
+                /* 起步朝向硬约束(P0-1):超出 ±30 度直接停机 */
+                if (fabsf(PathWrapAngle(upper.field_w)) >
+                    (PATH_START_YAW_LIMIT_DEG * DEG2RAD))
+                {
+                    runner_stop(PATH_REASON_STOP_HEADING);
+                    break;
+                }
                 if (sqrtf(dx * dx + dy * dy) <= PATH_START_OVERRIDE_MAX_M)
                 {
                     waypoints[0].x_m = upper.field_x_m;
@@ -1924,7 +1999,10 @@ void PathRunner_Run(void)
     case PATH_STATE_ARRIVED:
     case PATH_STATE_STOPPED:
     default:
-        Chassis_StopAll();
+        /* P2-4:进入终态时 runner_stop()/到达分支已调用一次
+         * Chassis_StopAll(SET_BRAKE 锁存,由 chassisTask 持续保持),
+         * 这里不再每周期覆盖,手动指令(Chassis_SetVelocity 解除锁存)
+         * 可以接管车辆。 */
         break;
     }
 
