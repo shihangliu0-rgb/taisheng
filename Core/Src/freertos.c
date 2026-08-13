@@ -31,7 +31,7 @@
 #include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
-#include "path_runner.h"
+#include "path_main.h"
 #include "up_main.h"
 #include "usart.h"
 #include "gpio.h"

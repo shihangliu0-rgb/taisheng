@@ -1569,43 +1569,23 @@
             </File>
           </Files>
         </Group>
-        <Group>
+                <Group>
           <GroupName>Application/User/path_planner</GroupName>
           <Files>
             <File>
-              <FileName>path_geometry.c</FileName>
+              <FileName>path_main.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_geometry.c</FilePath>
+              <FilePath>../user/path_planner/path_main.c</FilePath>
             </File>
             <File>
-              <FileName>path_spline.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_spline.c</FilePath>
+              <FileName>path_main.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/path_planner/path_main.h</FilePath>
             </File>
             <File>
-              <FileName>path_speed_profile.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_speed_profile.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_fusion.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_fusion.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_pure_pursuit.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_pure_pursuit.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_yaw_lock.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_yaw_lock.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_runner.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path_planner/path_runner.c</FilePath>
+              <FileName>path_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/path_planner/path_config.h</FilePath>
             </File>
           </Files>
         </Group>
