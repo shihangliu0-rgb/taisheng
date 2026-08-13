@@ -47,6 +47,16 @@ static volatile bool action_frame_pending;
 static volatile bool link_online;
 static volatile bool restart_requested;
 
+/*
+ * 指令仲裁(P0-5):路径规划器 RUN 期间独占底盘,返回 true 时本模块
+ * 丢弃手动速度/动作指令且不触发手动超时停机。path_main.c 提供强定义;
+ * 未接入规划器的工程(或规划器未运行)保持 false,行为与原来一致。
+ */
+__weak bool PathPlanner_OwnsChassis(void)
+{
+    return false;
+}
+
 static void reset_parser(void)
 {
     rx_index = 0U;
@@ -242,11 +252,11 @@ void ComputerLink_Run(void)
         __enable_irq();
     }
 
-    if (has_command)
+    if (has_command && !PathPlanner_OwnsChassis())
     {
         (void)Chassis_SetVelocity(cmd.vx, cmd.vy, cmd.z);
     }
-    if (has_action)
+    if (has_action && !PathPlanner_OwnsChassis())
     {
         (void)Action_Request((action_cmd_t)action);
     }
@@ -255,7 +265,8 @@ void ComputerLink_Run(void)
     DT35PnpLink_Send(computer_uart);
 
     now_ms = HAL_GetTick();
-    if (link_online && ((now_ms - last_rx_ms) > COMPUTER_LINK_TIMEOUT_MS))
+    if (link_online && ((now_ms - last_rx_ms) > COMPUTER_LINK_TIMEOUT_MS) &&
+        !PathPlanner_OwnsChassis())
     {
         link_online = false;
         Chassis_StopAll();

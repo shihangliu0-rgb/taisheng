@@ -80,6 +80,11 @@
  * 导致绕墙 C 的通道物理不可行。矩形膨胀才是该姿态下的真实占位。 */
 #define PATH_INFLATE_DX_M             (0.5f * PATH_ROBOT_WIDTH_M + PATH_SAFETY_MARGIN_M)   /* 0.30 */
 #define PATH_INFLATE_DY_M             (0.5f * PATH_ROBOT_LENGTH_M + PATH_SAFETY_MARGIN_M)  /* 0.3885 */
+/* 硬膨胀(轨迹验收用):机器人真实外廓 + 1.5cm。墙C西侧缺口等窄通道
+ * 无法在"软膨胀+8cm余量"下绕行,验收以硬膨胀为准(软膨胀只用于整形);
+ * 线段切角允许 2mm,采样直连弦与真实曲线的偏差即此量级 */
+#define PATH_HARD_MARGIN_M            0.015f
+#define PATH_SEGMENT_CUT_EPS_M        0.002f
 
 /* ==================================================================
  * 4. 固定路线 waypoints(field.yaml: route,起点由上电位姿覆盖)
@@ -90,23 +95,26 @@
  *    "让机器人必须走到 x=0.5 才能上翻" —— 即原路点表漏掉了这个拐点。
  *    先向西走到 x=0.5,再向北穿过 wall_C 西侧缺口(x<0.7)。
  */
-#define PATH_WAYPOINT_COUNT           8U
+#define PATH_WAYPOINT_COUNT           12U
 #define PATH_WAYPOINTS_TABLE \
-    {0.50f, 1.00f},   /* 起点(占位,上电覆盖) */ \
-    {1.00f, 1.65f},   /* 通道1 左入口 */        \
-    {2.00f, 1.65f},   /* 通道1 中段 */          \
-    {2.50f, 2.10f},   /* 右侧上翻拐点 */        \
-    {2.50f, 2.60f},   /* 通道2 右入口 */        \
-    {1.00f, 2.60f},   /* 通道2 左段 */          \
-    {0.50f, 2.60f},   /* wall_C 西侧缺口拐点(补) */ \
+    {0.50f, 1.00f},   /* 起点(占位,上电覆盖) */        \
+    {1.00f, 1.65f},   /* 通道1 左入口 */               \
+    {2.00f, 1.65f},   /* 通道1 中段 */                 \
+    {2.45f, 1.65f},   /* D角圆弧起点(顶点x=3.10) */    \
+    {2.70f, 1.70f},   /* D角圆弧点1(R=0.65) */         \
+    {2.91f, 1.84f},   /* D角圆弧点2 */                 \
+    {3.05f, 2.05f},   /* D角圆弧点3 */                 \
+    {3.10f, 2.30f},   /* D角圆弧终点 */                \
+    {1.00f, 2.60f},   /* 通道2 左段 */                 \
+    {0.375f, 2.60f},  /* 墙C西侧缺口入口(贴墙,窄通道) */ \
+    {0.375f, 3.55f},  /* 缺口出口(墙C膨胀区之上) */    \
     {0.50f, 3.70f}    /* 终点 */
 
 #define PATH_GOAL_X_M                 0.50f
 #define PATH_GOAL_Y_M                 3.70f
 #define PATH_ARRIVE_TOL_M             0.15f
 /* 上电后等待上位机位姿的时间,超时用 yaml 起点 */
-#define PATH_WAIT_START_MS            3000U
-/* 上位机给出的起点与 wp[0] 距离超过该值则拒绝覆盖(认为定位异常) */
+/* 上位机给出的起点与 wp[0] 距离超过该值则拒绝(不推进状态,继续等待) */
 #define PATH_START_OVERRIDE_MAX_M     1.0f
 
 /* ==================================================================
@@ -127,7 +135,15 @@
  * 拐角 D 处按切向圆弧几何推导,R >= 0.648 才能留够 0.40m 墙角距离,
  * 取 0.65。超限段直接替换为与入/出切线相切的圆弧(确定性整形)。 */
 #define PATH_MIN_TURN_RADIUS_M        0.65f
-#define PATH_CURV_LIMIT_ITERS         6U
+#define PATH_SAMPLE_STEP_MAX_M        0.15f   /* 最大采样点间距 */
+#define PATH_MIN_CLEARANCE_M          0.0005f /* 中心路径到膨胀墙的最小净距:
+                                                  推离保证"墙外",净距下限仅防接触;
+                                                  线段中点校验兜底防穿越 */
+#define PATH_KAPPA_HARD_MAX           25.0f   /* 验收硬上限(R=0.04):墙C缺口几何上无法
+                                                 做大半径,靠曲率自适应前视保证跟踪精度 */
+#define PATH_LAT_ACC_TOL              1.20f   /* 横向加速度超限容差 */
+#define PATH_BUILD_MAX_ATTEMPTS       3U      /* 整形+验收的最大尝试次数 */
+#define PATH_REQUIRE_MOTORS           1U      /* 任一电机离线 -> 停车 */
 
 /* ==================================================================
  * 6. 速度剖面(field.yaml: speed_profile)
@@ -144,12 +160,13 @@
 /* ==================================================================
  * 7. IMU + 上位机位姿互补融合(原 imu_fusion.py)
  * ================================================================== */
-#define PATH_FUSION_XY_GATE_M         0.30f   /* xy 跳变 >30cm 拒绝 */
+#define PATH_FUSION_XY_GATE_M         0.15f   /* 单帧 xy 跳变门限(>15cm 拒绝:
+                                                 20cm 阶跃必拒;机器人最快 3cm/帧,
+                                                 正常运动远低于该门限) */
 #define PATH_FUSION_YAW_GATE_DEG      20.0f   /* yaw 与预测差 >20° 拒绝 */
 #define PATH_FUSION_YAW_GAIN          0.15f   /* yaw 低通拉回增益 */
 #define PATH_FUSION_UPPER_TIMEOUT_MS  500U    /* 上位机丢失判定 */
 #define PATH_FUSION_CALIB_SAMPLES     200U    /* 静止标定采样帧数(约1s) */
-#define PATH_FUSION_MEDIAN_WIN        3U      /* xy 中值滤波窗口(单帧跳变剔除) */
 #define PATH_GYRO_SIGN                1.0f    /* IMU z 轴与 yaw 反向时改 -1 */
 
 /* ==================================================================
@@ -160,6 +177,7 @@
 /* 曲率自适应前视上限:急弯处缩短前视距离,防止纯追踪抄近道切墙 */
 #define PATH_LD_KAPPA_MAX_M           0.22f
 #define PATH_SEARCH_WINDOW            150U    /* 前向最近点搜索窗口 */
+#define PATH_SEARCH_BACK_WINDOW       10U     /* 允许回退窗口(防过冲卡死) */
 
 /* ==================================================================
  * 9. 航向锁(原 yaw_lock.py)
@@ -176,11 +194,8 @@
 /* ==================================================================
  * 10. 激光兜底 / 横向微调(field.yaml: sensors + 原 profile_runner.py)
  * ================================================================== */
-#define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制 vx=0 */
-/* vx=0 时允许的横向脱困速度(沿轨迹目标方向的横向分量平移,
- * 让全向轮在贴墙死锁时能侧移绕开,例如拐角抄近道后被墙 C 挡住) */
-#define PATH_LASER_STOP_LAT_MS        0.30f
-#define PATH_LASER_MAX_RANGE_M        5.0f
+#define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制 vx=0(停车,不横移) */
+#define PATH_LASER_MAX_RANGE_M        0.20f   /* 真实 DT35 量程 5-20cm(固件钳位) */
 #define PATH_LASER_TIMEOUT_MS         500U    /* 与 dt35_pnp_link 的离线判据一致 */
 #define PATH_STOP_ON_LASER_LOSS       1U      /* 前激光离线 -> 停车 */
 /* 横向微调:err = laser_left - expected_left[i],叠加在底盘 x(向右)上 */

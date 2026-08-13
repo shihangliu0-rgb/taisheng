@@ -87,6 +87,7 @@ typedef enum
     PATH_REASON_STOP_LASER_LOST,   /* 前激光离线 */
     PATH_REASON_STOP_BUILD,        /* 离线轨迹生成失败 */
     PATH_REASON_STOP_NUMERIC,      /* 数值异常(NaN/Inf)防护停车 */
+    PATH_REASON_STOP_MOTOR_LOST,   /* 任一底盘电机离线 */
     PATH_REASON_STOP_TIMEOUT       /* 全程超时 */
 } path_reason_t;
 
@@ -122,9 +123,13 @@ void PathRunner_Run(void);
 void PathRunner_GetDebug(path_debug_t *debug);
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count);
 
+/* 指令仲裁:规划器 RUN 期间返回 true,computer_link.c 以此屏蔽手动速度指令 */
+bool PathPlanner_OwnsChassis(void);
+
 /* ---------------- 几何辅助(调试/上位机可视化用) ---------------- */
 void PathGridMap_BuildReal(path_gridmap_t *map);
 void PathGridMap_BuildInflated(path_gridmap_t *map);
+void PathGridMap_BuildHardInflated(path_gridmap_t *map);   /* 验收用硬膨胀 */
 float PathGridMap_RayCast(const path_gridmap_t *map, float ox, float oy,
                           float dx, float dy, float max_range);
 float PathGridMap_DistTo(const path_gridmap_t *map, float x, float y);

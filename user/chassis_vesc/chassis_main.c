@@ -58,6 +58,7 @@ static uint32_t last_command_ms;
 static bool chassis_ready;
 
 volatile int16_t chassis_target_vx=0;
+static volatile bool brake_latched = false;   /* 停机刹车锁存(P0-6) */
 volatile int16_t chassis_target_vy=0;
 volatile int16_t chassis_target_z=0;
 
@@ -103,7 +104,15 @@ static void send_targets(void)
 
     for (i = 0U; i < ARRAY_SIZE(motors); i++)
     {
-        (void)VescMotor_SendRpm(&motors[i]);
+        if (brake_latched)
+        {
+            /* 刹车锁存:持续发送 SET_BRAKE,防止 SET_RPM 0 解除制动 */
+            (void)VescMotor_Brake(&motors[i]);
+        }
+        else
+        {
+            (void)VescMotor_SendRpm(&motors[i]);
+        }
     }
 }
 
@@ -170,6 +179,7 @@ HAL_StatusTypeDef Chassis_SetVelocity(int16_t vx, int16_t vy, int16_t z)
     chassis_target_vx = vx;
     chassis_target_vy = vy;
     chassis_target_z = z;
+    brake_latched = false;   /* 恢复转速控制,解除刹车 */
     return update_targets(vx, vy, z);
 }
 
@@ -200,8 +210,6 @@ void Chassis_Run1ms(void)
 
 void Chassis_StopAll(void)
 {
-    uint8_t i;
-
     if (!chassis_ready)
     {
         return;
@@ -210,9 +218,12 @@ void Chassis_StopAll(void)
     chassis_target_vx = 0;
     chassis_target_vy = 0;
     chassis_target_z = 0;
-    for (i = 0U; i < ARRAY_SIZE(motors); i++)
+    if (!brake_latched)
     {
-        (void)VescMotor_SetRpm(&motors[i], 0);
+        /* 故障安全停机(P0-6):使用 VESC 显式制动(SET_BRAKE,18A),
+         * 而非仅下发 0 转速;锁存后 chassisTask 每 10ms 重发 SET_BRAKE
+         * 保持制动,直到 Chassis_SetVelocity 解除锁存 */
+        brake_latched = true;
     }
     send_targets();
 }
