@@ -747,8 +747,13 @@ static void PathSpline_Finalize(path_point_t *points, uint16_t count,
         smooth_xy(points, count, 1U);
     }
     (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
-    smooth_xy(points, count, 1U);
-    (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
+    /* 平滑轮数为 0 时只推离:密集弧点路点下样条紧贴圆弧,
+     * 平滑只会引入接头 S 形抖动 */
+    if (PATH_PUSH_SMOOTH_ROUNDS > 0U)
+    {
+        smooth_xy(points, count, 1U);
+        (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
+    }
 
     update_arc_curvature(points, count);
 }
@@ -841,7 +846,7 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* --- 3. 反向扫描(刹车能力) --- */
+    /* --- 3. 反向扫描(刹车能力,用跟踪斜率带安全系数) --- */
     points[count - 1U].v_ref = PATH_V_GOAL_MS;
     for (i = count - 1U; i > 0U; i--)
     {
@@ -851,7 +856,7 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
             continue;
         }
         float v_brake = sqrtf(points[i].v_ref * points[i].v_ref +
-                              2.0f * PATH_A_LON_BRAKE * ds);
+                              2.0f * PATH_PROFILE_BRAKE_MS2 * ds);
         if (v_brake < points[i - 1U].v_ref)
         {
             points[i - 1U].v_ref = v_brake;
@@ -868,13 +873,32 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* 最终曲率封顶:对全部点(含首尾)强制 v <= sqrt(a_lat/|k|),
-     * 防止 v_min / v_goal 在高曲率处违反横向加速度上限(审计复现:
-     * 终点 k=440 时 v_goal=0.30 造成 v^2*|k|=39.6)。 */
+    /* 最终曲率封顶(带弧长前视窗):用"前方 0.8m 弧长内的最大曲率"
+     * 限速 v <= sqrt(a_lat/k_eff)。只看当前点曲率时,急弯前 0.3m 处
+     * 的速度仍然很高,而 slew 限幅(2m/s^2)在高速下转向能力不足,
+     * 机器人会冲出急弯(仿真复现:1.15m/s 冲过缺口直角弯甩出 0.17m
+     * 撞西墙)。0.8m 前视窗让速度在进入弯道前就降到位,并给命令
+     * 减速留 0.3m 余量。 */
     for (i = 0U; i < count; i++)
     {
         float k_abs = fabsf(points[i].kappa);
         float v_curve;
+        uint16_t j;
+
+        for (j = i + 1U; j < count; j++)
+        {
+            float kk;
+
+            if ((points[j].s_m - points[i].s_m) > PATH_CURV_LOOKAHEAD_M)
+            {
+                break;
+            }
+            kk = fabsf(points[j].kappa);
+            if (kk > k_abs)
+            {
+                k_abs = kk;
+            }
+        }
         if (k_abs < PATH_KAPPA_MIN)
         {
             k_abs = PATH_KAPPA_MIN;
@@ -1147,8 +1171,8 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     /* 数值合法性与场地范围校验:非法帧不参与融合,也不更新时间戳,
      * 即"坏数据不能喂活看门狗" */
     if ((x_m != x_m) || (y_m != y_m) || (yaw_rad != yaw_rad) ||
-        (x_m < -2.0f) || (x_m > 13.0f) ||
-        (y_m < -2.0f) || (y_m > 8.0f))
+        (x_m < PATH_POSE_X_MIN_M) || (x_m > PATH_POSE_X_MAX_M) ||
+        (y_m < PATH_POSE_Y_MIN_M) || (y_m > PATH_POSE_Y_MAX_M))
     {
         fusion.xy_rejects++;
         return false;
@@ -1288,9 +1312,24 @@ static void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
                           float *tx, float *ty)
 {
     float lookahead = PATH_LD_MIN_M + PATH_LD_K_S * v_ref;
-    float kappa_cap = PATH_LD_KAPPA_MAX_M /
-                      sqrtf(fabsf(kappa) + 0.05f);
+    float kappa_max;
+    float kappa_cap;
     uint16_t i;
+
+    /* 前视限幅用"前方窗口内最大曲率"(而非当前点曲率):
+     * 直角弯前 0.2m 处的 κ≈0,只看当前点会让机器人以全速+长前视
+     * 切进急弯(仿真复现:甩出 0.19m 撞西墙)。窗口约 15 个采样点。 */
+    kappa_max = fabsf(kappa);
+    for (i = i_near + 1U;
+         (i < count) && (i <= i_near + 15U); i++)
+    {
+        float kk = fabsf(points[i].kappa);
+        if (kk > kappa_max)
+        {
+            kappa_max = kk;
+        }
+    }
+    kappa_cap = PATH_LD_KAPPA_MAX_M / sqrtf(kappa_max + 0.05f);
 
     /* 急弯处缩短前视距离,抑制抄近道 */
     if (lookahead > kappa_cap)
@@ -1773,13 +1812,24 @@ static void runner_step(uint32_t now_ms, float dt_s)
     /* ---- 航向锁 ---- */
     w_cmd = PathYawLock_Step(fyaw, v_used);
 
-    /* ---- slew-rate 限幅(每周期变化不超过 max_accel * dt) ---- */
+    /* ---- slew-rate 限幅:平移用"矢量幅值"限幅 ----
+     * |Δv| <= max_accel * dt,方向可自由旋转。逐轴限幅在转弯时会
+     * 扭曲速度矢量方向(滞后角 ~ v^2*κ/a),急弯处高达 40 度以上,
+     * 机器人横着漂出弯道(仿真复现:缺口直角弯甩出 0.17m 撞西墙)。
+     * 矢量限幅只约束速度大小的变化率,转向由 yaw-lock 单独限幅。 */
     dv_max = PATH_SLEW_XY_ACCEL_MS2 * dt_s;
     dw_max = PATH_SLEW_W_ACCEL_RADS2 * dt_s;
-    if ((vx_c - last_cmd_vx) > dv_max) { vx_c = last_cmd_vx + dv_max; }
-    if ((vx_c - last_cmd_vx) < -dv_max) { vx_c = last_cmd_vx - dv_max; }
-    if ((vy_c - last_cmd_vy) > dv_max) { vy_c = last_cmd_vy + dv_max; }
-    if ((vy_c - last_cmd_vy) < -dv_max) { vy_c = last_cmd_vy - dv_max; }
+    {
+        float dvx = vx_c - last_cmd_vx;
+        float dvy = vy_c - last_cmd_vy;
+        float dv_mag = sqrtf(dvx * dvx + dvy * dvy);
+        if (dv_mag > dv_max)
+        {
+            float scale = dv_max / dv_mag;
+            vx_c = last_cmd_vx + dvx * scale;
+            vy_c = last_cmd_vy + dvy * scale;
+        }
+    }
     if ((w_cmd - last_cmd_w) > dw_max) { w_cmd = last_cmd_w + dw_max; }
     if ((w_cmd - last_cmd_w) < -dw_max) { w_cmd = last_cmd_w - dw_max; }
     last_cmd_vx = vx_c;
