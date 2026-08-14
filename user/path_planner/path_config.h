@@ -6,7 +6,7 @@
 
 #define PATH_ENABLE                   1U     /* 1 = 启用路径规划与控制 */
 #define PATH_CONTROL_PERIOD_MS        5U     /* 控制周期,默认 200 Hz */
-#define PATH_MAX_RUN_MS               20000U /* 全程超时保护,超时主动停 */
+#define PATH_MAX_RUN_MS               30000U /* 全程超时(位姿<10Hz 时限速,留足时间) */
 
 /* 调试打印:默认关闭 */
 #define PATH_DEBUG                    0U
@@ -50,7 +50,10 @@
 #define PATH_HARD_MARGIN_M            0.015f
 #define PATH_SEGMENT_CUT_EPS_M        0.002f
 
-#define PATH_WAYPOINT_COUNT           21U
+#define PATH_WAYPOINT_COUNT           64U    /* 路由工作容量(加密后) */
+/* 路由直线段加密步长:长腿+少点的弦长参数化会让样条在拐角折叠
+ * (kappa 数百,仿真复现);加密后节点均匀,拐角自然圆滑 */
+#define PATH_ROUTE_STEP_M             0.15f
 #define PATH_WAYPOINTS_TABLE \
     {0.50f, 1.00f},   /* 名义起点占位:上电后由小电脑实测位姿整体覆盖 */ \
     {0.50f, 1.65f},   /* 先北上到通道1 高度:墙1 西端 x=1.05 */ \
@@ -83,6 +86,13 @@
 #define PATH_START_YAW_LIMIT_DEG      30.0f
 /* CALIB 总超时 */
 #define PATH_CALIB_TIMEOUT_MS         10000U
+/* 故障去抖(P0-3):连续故障累计超窗口才停机,单次抖动不误停 */
+#define PATH_FAULT_IMU_MS             200U
+#define PATH_FAULT_MOTOR_MS           400U
+#define PATH_FAULT_LASER_MS           1500U   /* 下位板 I2C 重试 1000ms */
+/* 瞬态故障停机后,输入连续健康达此时长重新布防(限次数) */
+#define PATH_RECOVER_MS               1000U
+#define PATH_RECOVER_MAX_TIMES        3U
 
 #define PATH_SPLINE_DEGREE            3U
 #define PATH_SPLINE_SAMPLES           300U
@@ -118,9 +128,13 @@
 #define PATH_FUSION_UPPER_TIMEOUT_MS  500U    /* 链路丢失判定(CRC 有效帧刷新) */
 #define PATH_FUSION_CALIB_SAMPLES     200U    /* 静止标定采样帧数(约1s) */
 /* 数据可用性 */
-#define PATH_UPPER_DEGRADE_MS         100U   /* 缺帧降速 */
+#define PATH_UPPER_DEGRADE_MS         150U   /* 数据年龄超此即降速 */
 /* 重新捕获 */
 #define PATH_FUSION_REACQ_MS          300U
+/* 位姿延迟补偿(P0-2):按此延迟用指令速度前推测量值(实测标定填真值) */
+#define PATH_POSE_LATENCY_MS          120U   /* 实测标定后填真值 */
+/* yaw 重捕获(P0-1):连续一致偏出门限达此帧数,强制整帧覆盖 yaw */
+#define PATH_FUSION_YAW_REACQ_N       15U
 #define PATH_UPPER_DEGRADE_V_MS       0.30f
 #define PATH_UPPER_DATA_STOP_MS       800U
 #define PATH_GYRO_SIGN                1.0f    /* IMU z 轴与 yaw 反向时改 -1 */
@@ -130,7 +144,7 @@
 /* 曲率自适应前视上限:急弯处缩短前视距离 */
 #define PATH_LD_KAPPA_MAX_M           0.08f
 #define PATH_SEARCH_WINDOW            150U    /* 前向最近点搜索窗口 */
-#define PATH_SEARCH_BACK_WINDOW       10U     /* 允许回退窗口(防过冲卡死) */
+#define PATH_SEARCH_BACK_WINDOW       40U     /* 回退窗口(过冲后找回最近点) */
 
 #define PATH_YAW_TARGET_RAD           0.0f    /* 锁定目标:车头朝 world +y */
 #define PATH_YAW_DEADZONE_DEG         1.0f
@@ -144,14 +158,18 @@
 #define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制停车 */
 #define PATH_LASER_MAX_RANGE_M        0.20f   /* 真实 DT35 量程 5-20cm(固件钳位) */
 /* 期望墙门控 */
-#define PATH_LASER_EXPECTED_MARGIN_M  0.05f
+#define PATH_LASER_EXPECTED_MARGIN_M  0.04f
 #define PATH_LASER_RECOVERY_V_MS      0.25f
+/* 期望墙表射程(须大于激光量程,否则期望值全被钳到 0.20 门控恒真) */
+#define PATH_EXPECTED_FRONT_RANGE_M   0.5f
+#define PATH_EXPECTED_SIDE_RANGE_M    0.5f
 #define PATH_LASER_LATERAL_DIR_MAX    0.60f   /* 目标方向车体纵向分量阈值 */
 /* 无回波=0 视为超程 */
 #define PATH_LASER_NO_ECHO_FREE       1U
 #define PATH_LASER_TIMEOUT_MS         500U    /* 与 dt35_pnp_link 的离线判据一致 */
 #define PATH_STOP_ON_LASER_LOSS       1U      /* 前激光离线 -> 停车 */
 
+#define PATH_LAT_TRIM_ENABLE          0U      /* 左激光微调默认关(量程门控失真) */
 #define PATH_LAT_TRIM_KP              1.5f
 #define PATH_LAT_TRIM_MAX_MS          0.30f
 /* 横向微调符号 */

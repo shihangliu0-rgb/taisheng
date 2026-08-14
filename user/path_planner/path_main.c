@@ -829,14 +829,14 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
                      1.0f, 0.0f, &ox, &oy, &dx, &dy);
         points[i].exp_laser_front_m = PathGridMap_RayCast(real_map, ox, oy,
                                                           dx, dy,
-                                                          PATH_LASER_MAX_RANGE_M);
+                                                          PATH_EXPECTED_FRONT_RANGE_M);
 
         PathLaserRay(points[i].x_m, points[i].y_m, PATH_YAW_TARGET_RAD,
                      PATH_LASER_LEFT_X_M, PATH_LASER_LEFT_Y_M,
                      0.0f, 1.0f, &ox, &oy, &dx, &dy);
         points[i].exp_laser_left_m = PathGridMap_RayCast(real_map, ox, oy,
                                                          dx, dy,
-                                                         PATH_LASER_MAX_RANGE_M);
+                                                         PATH_EXPECTED_SIDE_RANGE_M);
     }
 
     return true;
@@ -1020,6 +1020,8 @@ typedef struct
     uint32_t xy_rejects;
     uint32_t yaw_rejects;
     uint32_t upper_frames;
+    uint16_t yaw_rej_run;       /* 连续一致偏出门限的帧数(P0-1 重捕获) */
+    int8_t   yaw_rej_sign;
 } path_fusion_t;
 
 static path_fusion_t fusion;
@@ -1076,7 +1078,6 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
 {
     float dx;
     float dy;
-    float yaw_err_rad;
 
     /* 数值合法性与场地范围校验:非法帧不参与融合 */
     if ((x_m != x_m) || (y_m != y_m) || (yaw_rad != yaw_rad) ||
@@ -1104,24 +1105,43 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         }
     }
 
-    /* 首帧 yaw 全量初始化 */
-    if (!fusion.have_upper)
+    /* yaw:首帧或 REACQ(数据过旧)直接全量覆盖 */
+    if (!fusion.have_upper ||
+        ((uint32_t)(now_ms - fusion.last_data_ms) > PATH_FUSION_REACQ_MS))
     {
         fusion.yaw = yaw_rad;
+        fusion.yaw_rej_run = 0U;
     }
     else
     {
-        /* yaw 门限 */
-        yaw_err_rad = fabsf(PathWrapAngle(yaw_rad - fusion.yaw));
-        if (yaw_err_rad > PATH_FUSION_YAW_GATE_DEG * DEG2RAD)
+        float yaw_err = PathWrapAngle(yaw_rad - fusion.yaw);
+        if (fabsf(yaw_err) > PATH_FUSION_YAW_GATE_DEG * DEG2RAD)
         {
+            int8_t sign = (yaw_err >= 0.0f) ? 1 : -1;
             fusion.yaw_rejects++;
+            /* P0-1:连续一致方向偏出门限(打滑/侧撞后测量恒偏),
+             * 计数达标强制整帧覆盖,不再永久锁死 */
+            if ((fusion.yaw_rej_run > 0U) &&
+                (sign == fusion.yaw_rej_sign))
+            {
+                fusion.yaw_rej_run++;
+            }
+            else
+            {
+                fusion.yaw_rej_run = 1U;
+                fusion.yaw_rej_sign = sign;
+            }
+            if (fusion.yaw_rej_run >= PATH_FUSION_YAW_REACQ_N)
+            {
+                fusion.yaw = yaw_rad;
+                fusion.yaw_rej_run = 0U;
+            }
         }
         else
         {
             /* yaw 低通拉回 */
-            fusion.yaw += PATH_FUSION_YAW_GAIN *
-                          PathWrapAngle(yaw_rad - fusion.yaw);
+            fusion.yaw_rej_run = 0U;
+            fusion.yaw += PATH_FUSION_YAW_GAIN * yaw_err;
         }
     }
 
@@ -1309,10 +1329,12 @@ static uint16_t trajectory_count;
 static path_gridmap_t real_map;
 static path_gridmap_t inflated_map;
 static path_gridmap_t hard_map;
-static path_waypoint_t waypoints[PATH_WAYPOINT_COUNT] =
+static const path_waypoint_t route_template[PATH_WAYPOINT_COUNT] =
 {
     PATH_WAYPOINTS_TABLE
 };
+static path_waypoint_t raw_route[24];      /* 区域路由(未加密) */
+static path_waypoint_t waypoints[PATH_WAYPOINT_COUNT];
 
 static path_state_t state = PATH_STATE_INIT;
 static path_reason_t reason = PATH_REASON_BOOT;
@@ -1326,9 +1348,199 @@ static uint32_t last_debug_ms;
 #endif
 static uint16_t last_i_near;
 static uint32_t last_pc_frame_count;   /* 上位机帧去重:每帧只融合一次 */
+static uint16_t imu_fault_cycles;      /* 连续故障周期计数(去抖,P0-3) */
+static uint16_t motor_fault_cycles;
+static uint16_t laser_fault_cycles;
+static uint32_t recover_healthy_since; /* 0=未开始计时 */
+static uint8_t  recover_count;
 static float last_cmd_vx;
 static float last_cmd_vy;
 static float last_cmd_w;
+
+/* P0-4:按起点区域动态路由(路由表见 README 附录)。
+ * 模板布局:[0]起点 [1](0.5,1.65) [2](1.0,1.65) [3](2.0,1.65)D弧起点
+ * [4..14]D弧 [15](2.0,2.60) [16](1.0,2.60) [17](0.375,2.60)
+ * [18](0.36,2.66) [19](0.36,3.70) [20]目标点 */
+static uint8_t build_route(void)
+{
+    float sx = raw_route[0].x_m;
+    float sy = raw_route[0].y_m;
+
+    if (sy >= 3.45f)
+    {
+        /* 终点区:直行到目标 */
+        raw_route[1].x_m = PATH_GOAL_X_M;
+        raw_route[1].y_m = PATH_GOAL_Y_M;
+        return 2U;
+    }
+    if (sy >= 2.45f)
+    {
+        if (sx <= 0.45f)
+        {
+            /* B0:缺口列内,直行北上即可 */
+            raw_route[1].x_m = sx;
+            raw_route[1].y_m = 3.70f;
+            return 2U;
+        }
+        if (sy >= 2.75f)
+        {
+            /* 墙C 邻近带(2.75~3.45):车体无法安全绕行,非法起点 */
+            return 0U;
+        }
+        /* B1:通道2:西行到缺口列再北上 */
+        raw_route[1].x_m = 0.375f;
+        raw_route[1].y_m = sy;
+        raw_route[2].x_m = 0.36f;
+        raw_route[2].y_m = sy + 0.06f;
+        raw_route[3].x_m = 0.36f;
+        raw_route[3].y_m = 3.70f;
+        return 4U;
+    }
+    if (sy >= 1.12f)
+    {
+        if (sx <= 2.0f)
+        {
+            /* C1:墙B 西侧(含通道1 西段):并入 y=1.65 走标准 D 弧 */
+            if (fabsf(sy - 1.65f) < 0.15f)
+            {
+                /* 已在通道线上:跳过北靠微腿,直接东行入弧 */
+                raw_route[1].x_m = 2.0f;
+                raw_route[1].y_m = 1.65f;
+                (void)memmove(&raw_route[2], &raw_route[4],
+                              17U * sizeof(path_waypoint_t));
+                return 19U;
+            }
+            raw_route[1].x_m = sx;
+            raw_route[1].y_m = 1.65f;
+            (void)memmove(&raw_route[2], &raw_route[3],
+                          18U * sizeof(path_waypoint_t));
+            return 20U;
+        }
+        /* C2:D 弧东侧:北转直连通道2(绕弧折返会 180 度急转) */
+        raw_route[1].x_m = sx;
+        raw_route[1].y_m = 2.60f;
+        raw_route[2].x_m = 1.0f;
+        raw_route[2].y_m = 2.60f;
+        raw_route[3].x_m = 0.375f;
+        raw_route[3].y_m = 2.60f;
+        raw_route[4].x_m = 0.36f;
+        raw_route[4].y_m = 2.66f;
+        raw_route[5].x_m = 0.36f;
+        raw_route[5].y_m = 3.70f;
+        return 6U;
+    }
+    if (sx <= 0.8f)
+    {
+        /* 西南:L 形并入通道1 */
+        raw_route[1].x_m = sx;
+        raw_route[1].y_m = 1.65f;
+        return 21U;
+    }
+    /* 东南:先西行 x=0.5 再北上(与标称同形) */
+    raw_route[1].x_m = 0.5f;
+    raw_route[1].y_m = sy;
+    raw_route[2].x_m = 0.5f;
+    raw_route[2].y_m = 1.65f;
+    return 21U;
+}
+
+/* 路由加密:直线段按 PATH_ROUTE_STEP_M 插入中间点。长腿+少点的
+ * 弦长参数化会让样条在拐角折叠(kappa 数百),加密后节点均匀,
+ * 拐角由样条自然圆滑(与静态 D 弧表同一原理) */
+static uint8_t densify_route(const path_waypoint_t *src, uint8_t n,
+                             path_waypoint_t *dst, uint8_t max)
+{
+    uint8_t out = 0U;
+    uint8_t i;
+
+    if ((n == 0U) || (max < n))
+    {
+        return 0U;
+    }
+    dst[out++] = src[0];
+    for (i = 1U; i < n; i++)
+    {
+        float dx = src[i].x_m - src[i - 1U].x_m;
+        float dy = src[i].y_m - src[i - 1U].y_m;
+        float len = sqrtf(dx * dx + dy * dy);
+        uint16_t steps = (uint16_t)(len / PATH_ROUTE_STEP_M);
+        uint16_t k;
+
+        for (k = 1U; k <= steps; k++)
+        {
+            float t = (float)k / (float)(steps + 1U);
+            if (out >= max) { return out; }
+            dst[out].x_m = src[i - 1U].x_m + t * dx;
+            dst[out].y_m = src[i - 1U].y_m + t * dy;
+            out++;
+        }
+        if (out >= max) { return out; }
+        dst[out++] = src[i];
+    }
+    return out;
+}
+
+/* P0-4:弧长均匀重采样。u 域均匀采样在长路径/推离后弧长步长爆炸,
+ * 导致采样间距验收失败;重采样保证步长恒定,并再推离一次 */
+static void resample_uniform(path_point_t *pts, uint16_t *count)
+{
+    static path_point_t temp[PATH_SPLINE_SAMPLES];
+    float total;
+    uint16_t n_old;
+    uint16_t n_new;
+    uint16_t i;
+    uint16_t j;
+
+    if ((pts == NULL) || (count == NULL) || (*count < 2U))
+    {
+        return;
+    }
+    n_old = *count;
+    total = pts[n_old - 1U].s_m;
+    if (total < 1e-3f)
+    {
+        return;
+    }
+
+    /* 点数按长度自适应(约 3cm/点,上限 300):
+     * 固定 300 点会让短路线采样过密,厘米级微抖动被放大成
+     * kappa=90 的噪声尖峰(仿真复现,短路线 BUILD 必败) */
+    if (total >= 6.0f)
+    {
+        n_new = PATH_SPLINE_SAMPLES;   /* 标准路线保持 300 点 */
+    }
+    else
+    {
+        n_new = (uint16_t)(total / 0.03f);
+        if (n_new < 30U) { n_new = 30U; }
+        if (n_new > PATH_SPLINE_SAMPLES) { n_new = PATH_SPLINE_SAMPLES; }
+    }
+
+    (void)memcpy(temp, pts, n_old * sizeof(path_point_t));
+    for (i = 1U; i < n_new - 1U; i++)
+    {
+        float s_t = total * (float)i / (float)(n_new - 1U);
+        j = 1U;
+        while ((j < n_old) && (temp[j].s_m < s_t))
+        {
+            j++;
+        }
+        {
+            float s0 = temp[j - 1U].s_m;
+            float s1 = temp[j].s_m;
+            float t = ((s1 - s0) > 1e-6f) ?
+                      ((s_t - s0) / (s1 - s0)) : 0.0f;
+            pts[i].x_m = temp[j - 1U].x_m +
+                         t * (temp[j].x_m - temp[j - 1U].x_m);
+            pts[i].y_m = temp[j - 1U].y_m +
+                         t * (temp[j].y_m - temp[j - 1U].y_m);
+        }
+    }
+    pts[n_new - 1U] = temp[n_old - 1U];
+    (void)PathSpline_PushAwayFromWalls(pts, n_new, &inflated_map);
+    update_arc_curvature(pts, n_new);
+    *count = n_new;
+}
 
 static void runner_stop(path_reason_t why)
 {
@@ -1338,6 +1550,23 @@ static void runner_stop(path_reason_t why)
     last_cmd_vy = 0.0f;
     last_cmd_w = 0.0f;
     Chassis_StopAll();
+}
+
+/* 四轮电机是否全部在线(P0-3 恢复判定) */
+static bool motors_online(void)
+{
+    uint8_t wheel;
+
+    for (wheel = 0U; wheel < CHASSIS_WHEEL_COUNT; wheel++)
+    {
+        vesc_motor_status_t st;
+        if (!Chassis_GetStatus((chassis_wheel_t)wheel, &st) ||
+            !st.online)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* 线段中点穿透检查 */
@@ -1474,7 +1703,27 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
             if (PcLink_GetPosition(&upper) &&
                 ((upper.flags & PC_LINK_FLAG_FIELD_VALID) != 0U))
             {
-                (void)PathFusion_UpdateUpper(upper.field_x_m, upper.field_y_m,
+                float mx = upper.field_x_m;
+                float my = upper.field_y_m;
+                /* P0-2:链路延迟使测量滞后 v*L,按配置延迟用指令
+                 * 速度把测量点前推,消除大部分滞后误差 */
+                if (PATH_POSE_LATENCY_MS > 0U)
+                {
+                    float c;
+                    float s;
+                    float vxw;
+                    float vyw;
+                    float fyaw_l;
+
+                    PathFusion_Get(NULL, NULL, &fyaw_l);
+                    c = cosf(fyaw_l);
+                    s = sinf(fyaw_l);
+                    vxw = vx_ch_ms * c - vy_ch_ms * s;
+                    vyw = vx_ch_ms * s + vy_ch_ms * c;
+                    mx += vxw * (PATH_POSE_LATENCY_MS * 0.001f);
+                    my += vyw * (PATH_POSE_LATENCY_MS * 0.001f);
+                }
+                (void)PathFusion_UpdateUpper(mx, my,
                                              upper.field_w, now_ms);
             }
         }
@@ -1525,51 +1774,70 @@ static void runner_step(uint32_t now_ms, float dt_s)
                                   &laser_f, &laser_f_ok,
                                   &laser_l, &laser_l_ok);
     PathFusion_Get(&fx, &fy, &fyaw);
-    /* ---- 安全检查(顺序即优先级) ---- */
+    /* ---- 安全检查(顺序即优先级,P0-3 去抖) ---- */
     if (!PathFusion_HasUpper() || PathFusion_IsUpperLost(now_ms))
     {
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
     }
-    /* 数据降级限速 */
     if (PathFusion_DataAge(now_ms) > PATH_UPPER_DATA_STOP_MS)
     {
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
     }
+
+    /* IMU 去抖:连续累计超 PATH_FAULT_IMU_MS 才停,单次抖动不误停 */
     if (!imu_ok)
+    {
+        if (imu_fault_cycles < 0xFFF0U) { imu_fault_cycles++; }
+    }
+    else
+    {
+        imu_fault_cycles = 0U;
+    }
+    if ((uint32_t)imu_fault_cycles * PATH_CONTROL_PERIOD_MS >=
+        PATH_FAULT_IMU_MS)
     {
         runner_stop(PATH_REASON_STOP_IMU_LOST);
         return;
     }
+
+    /* 前激光去抖(下位板 I2C 重试 1000ms,窗口取 1500ms) */
     if ((PATH_STOP_ON_LASER_LOSS != 0U) && !laser_f_ok)
+    {
+        if (laser_fault_cycles < 0xFFF0U) { laser_fault_cycles++; }
+    }
+    else
+    {
+        laser_fault_cycles = 0U;
+    }
+    if ((uint32_t)laser_fault_cycles * PATH_CONTROL_PERIOD_MS >=
+        PATH_FAULT_LASER_MS)
     {
         runner_stop(PATH_REASON_STOP_LASER_LOST);
         return;
     }
+
+    /* 电机去抖 */
+    if ((PATH_REQUIRE_MOTORS != 0U) && !motors_online())
+    {
+        if (motor_fault_cycles < 0xFFF0U) { motor_fault_cycles++; }
+    }
+    else
+    {
+        motor_fault_cycles = 0U;
+    }
+    if ((uint32_t)motor_fault_cycles * PATH_CONTROL_PERIOD_MS >=
+        PATH_FAULT_MOTOR_MS)
+    {
+        runner_stop(PATH_REASON_STOP_MOTOR_LOST);
+        return;
+    }
+
     if ((uint32_t)(now_ms - run_start_ms) > PATH_MAX_RUN_MS)
     {
         runner_stop(PATH_REASON_STOP_TIMEOUT);
         return;
-    }
-    if (PATH_REQUIRE_MOTORS != 0U)
-    {
-        uint8_t wheel;
-        uint8_t offline = 0U;
-        for (wheel = 0U; wheel < CHASSIS_WHEEL_COUNT; wheel++)
-        {
-            vesc_motor_status_t st;
-            if (!Chassis_GetStatus((chassis_wheel_t)wheel, &st) ||
-                !st.online)
-            {
-                offline++;
-            }
-        }
-        if (offline > 0U)
-        {
-            runner_stop(PATH_REASON_STOP_MOTOR_LOST);
-            return;
-        }
     }
 
     /* ---- 到达判定(只用融合位姿) ---- */
@@ -1669,8 +1937,9 @@ static void runner_step(uint32_t now_ms, float dt_s)
 
     PathWorldToChassis(vx_w, vy_w, fyaw, &vx_c, &vy_c);
 
-    /* 左激光横向微调 */
-    if ((v_used > 0.0f) && laser_l_ok &&
+    /* 左激光横向微调(默认关,见 PATH_LAT_TRIM_ENABLE) */
+    if ((PATH_LAT_TRIM_ENABLE != 0U) &&
+        (v_used > 0.0f) && laser_l_ok &&
         (exp_l <= PATH_LASER_MAX_RANGE_M))
     {
         float err = laser_l - exp_l;
@@ -1863,46 +2132,48 @@ void PathRunner_Run(void)
 
     case PATH_STATE_BUILD:
     {
+        uint8_t wp_count;
+        float fx0;
+        float fy0;
+
         PathGridMap_BuildReal(&real_map);
         PathGridMap_BuildInflated(&inflated_map);
         PathGridMap_BuildHardInflated(&hard_map);
 
-        /* 按起点动态生成拐点 */
+        /* 模板拷贝 + 起点=融合位姿 + 区域路由 + 加密 */
+        (void)memcpy(raw_route, route_template,
+                     21U * sizeof(path_waypoint_t));
+        PathFusion_Get(&fx0, &fy0, NULL);
+        if (PathGridMap_Contains(&hard_map, fx0, fy0))
         {
-            float sx = waypoints[0].x_m;
-            float sy = waypoints[0].y_m;
-
-            if (sy >= 1.12f)
-            {
-                waypoints[1].x_m = sx;
-                waypoints[1].y_m = 1.65f;
-                waypoints[2].x_m = 1.4f;
-                waypoints[2].y_m = 1.65f;
-            }
-            else if (sx <= 0.8f)
-            {
-                waypoints[1].x_m = sx;
-                waypoints[1].y_m = 1.65f;
-                waypoints[2].x_m = 1.0f;
-                waypoints[2].y_m = 1.65f;
-            }
-            else
-            {
-                waypoints[1].x_m = 0.5f;
-                waypoints[1].y_m = sy;
-                waypoints[2].x_m = 0.5f;
-                waypoints[2].y_m = 1.65f;
-            }
+            /* 起点车体与墙重叠(如贴墙 2cm):非法,直接拒绝 */
+            runner_stop(PATH_REASON_STOP_BUILD);
+            break;
+        }
+        raw_route[0].x_m = fx0;
+        raw_route[0].y_m = fy0;
+        wp_count = build_route();
+        if (wp_count < 2U)
+        {
+            runner_stop(PATH_REASON_STOP_BUILD);
+            break;
+        }
+        wp_count = densify_route(raw_route, wp_count,
+                                 waypoints, PATH_WAYPOINT_COUNT);
+        if (wp_count < 2U)
+        {
+            runner_stop(PATH_REASON_STOP_BUILD);
+            break;
         }
 
-        if (!PathSpline_Build(waypoints, PATH_WAYPOINT_COUNT,
+        if (!PathSpline_Build(waypoints, wp_count,
                               trajectory, PATH_SPLINE_SAMPLES,
                               &trajectory_count))
         {
             runner_stop(PATH_REASON_STOP_BUILD);
             break;
         }
-        /* 整形+验收循环 */
+        /* 整形 + 弧长重采样 + 验收循环 */
         {
             uint8_t attempt;
             bool built = false;
@@ -1911,6 +2182,7 @@ void PathRunner_Run(void)
             {
                 PathSpline_Finalize(trajectory, trajectory_count,
                                     &inflated_map);
+                resample_uniform(trajectory, &trajectory_count);
                 if (!PathSpeedProfile_Build(trajectory, trajectory_count,
                                             &real_map))
                 {
@@ -1942,9 +2214,64 @@ void PathRunner_Run(void)
         break;
 
     case PATH_STATE_ARRIVED:
+        /* 到达:锁存,不自动恢复 */
+        break;
+
     case PATH_STATE_STOPPED:
+        /* P0-3 瞬态故障恢复:连续健康 PATH_RECOVER_MS 后重新布防
+         * (重新按当前位置规划),限 PATH_RECOVER_MAX_TIMES 次;
+         * BUILD/NUMERIC/HEADING/TIMEOUT 等确定性故障不自动恢复 */
+        {
+            bool transient = (reason == PATH_REASON_STOP_UPPER_LOST) ||
+                             (reason == PATH_REASON_STOP_IMU_LOST) ||
+                             (reason == PATH_REASON_STOP_LASER_LOST) ||
+                             (reason == PATH_REASON_STOP_MOTOR_LOST);
+
+            if (transient && (recover_count < PATH_RECOVER_MAX_TIMES))
+            {
+                imu_data_t imu;
+                float lf;
+                float ll;
+                bool lf_ok;
+                bool ll_ok;
+                bool imu_ok;
+                bool healthy;
+
+                imu_ok = runner_read_and_fuse(now_ms, dt_s, 0.0f, 0.0f,
+                                              &imu, &lf, &lf_ok, &ll, &ll_ok);
+                healthy = imu_ok && lf_ok && motors_online() &&
+                          !PathFusion_IsUpperLost(now_ms) &&
+                          PathFusion_HasUpper();
+
+                if (healthy)
+                {
+                    if (recover_healthy_since == 0U)
+                    {
+                        recover_healthy_since = now_ms;
+                    }
+                    else if ((uint32_t)(now_ms - recover_healthy_since) >=
+                             PATH_RECOVER_MS)
+                    {
+                        recover_healthy_since = 0U;
+                        recover_count++;
+                        imu_fault_cycles = 0U;
+                        motor_fault_cycles = 0U;
+                        laser_fault_cycles = 0U;
+                        last_i_near = 0U;
+                        state = PATH_STATE_WAIT_START;
+                        reason = PATH_REASON_WAIT_START;
+                        state_start_ms = now_ms;
+                    }
+                }
+                else
+                {
+                    recover_healthy_since = 0U;
+                }
+            }
+        }
+        break;
+
     default:
-        /* P2-4 */
         break;
     }
 
