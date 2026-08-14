@@ -1898,9 +1898,9 @@ void PathRunner_Run(void)
 
         Chassis_StopAll();
 
-        /* 修复(审计 P0-4):必须收到"新鲜的、数值合法、在 1m 容忍内的"
-         * 位姿帧才推进 BUILD;无位姿则无限等待(保持未布防,禁止盲跑);
-         * 超 1m 的起点被拒绝且不推进状态。
+        /* 起点 = 小电脑实测位姿(每次上电都是新点,不设与占位点的
+         * 距离门限)。必须收到首帧"数值合法、在场内、|yaw|<=30 度"
+         * 的位置帧才推进 BUILD;无位姿则无限等待(保持未布防,禁止盲跑)。
          * 注意:起点检查必须在 runner_read_and_fuse 之前,否则新帧会被
          * 融合去重逻辑先消费,导致本检查永远等不到"新帧"。 */
         {
@@ -1910,8 +1910,6 @@ void PathRunner_Run(void)
                 PcLink_GetPosition(&upper) &&
                 ((upper.flags & PC_LINK_FLAG_FIELD_VALID) != 0U))
             {
-                float dx = upper.field_x_m - waypoints[0].x_m;
-                float dy = upper.field_y_m - waypoints[0].y_m;
                 last_pc_frame_count = pos_seq;
                 PathFusion_TouchLink(now_ms);
                 /* 起步朝向硬约束(P0-1):超出 ±30 度直接停机 */
@@ -1921,20 +1919,19 @@ void PathRunner_Run(void)
                     runner_stop(PATH_REASON_STOP_HEADING);
                     break;
                 }
-                if (sqrtf(dx * dx + dy * dy) <= PATH_START_OVERRIDE_MAX_M)
+                /* UpdateUpper 会做数值/场地范围校验:首帧不合法则
+                 * 继续等下一帧,并把合法帧整体写入 waypoints[0] */
+                if (!PathFusion_UpdateUpper(upper.field_x_m,
+                                            upper.field_y_m,
+                                            upper.field_w, now_ms))
                 {
-                    waypoints[0].x_m = upper.field_x_m;
-                    waypoints[0].y_m = upper.field_y_m;
-                    last_pc_frame_count = pos_seq;
-                    /* 立即把该帧喂给融合器:否则 RUN 首步(下一帧到达前)
-                     * 会因 have_upper==false 误判 STOP_UPPER_LOST */
-                    (void)PathFusion_UpdateUpper(upper.field_x_m,
-                                                 upper.field_y_m,
-                                                 upper.field_w, now_ms);
-                    state = PATH_STATE_BUILD;
-                    state_start_ms = now_ms;
                     break;
                 }
+                waypoints[0].x_m = upper.field_x_m;
+                waypoints[0].y_m = upper.field_y_m;
+                state = PATH_STATE_BUILD;
+                state_start_ms = now_ms;
+                break;
             }
         }
 
