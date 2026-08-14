@@ -175,7 +175,7 @@ d_goal = math.hypot(WP[-1][0] - GOAL[0], WP[-1][1] - GOAL[1])
 print(f"  末路点 {WP[-1][0]:.2f},{WP[-1][1]:.2f} 到终点 {GOAL}: {d_goal * 100:.1f} cm"
       f"(到达容差 {TOL * 100:.0f} cm,{'OK' if d_goal <= TOL else '超容差!'})")
 print("=" * 72)
-print("注意: 墙1(墙A)、墙B东端 x=2.0 与墙C东端延伸到东墙均为反推值,需实车量测确认。")
+print("注意: 墙1/墙C(x 1.05~3.00)为用户实测,墙B 东端 x=2.0 为反推值。")
 
 # ---------------------------------------------------------------- 画图
 import matplotlib
@@ -239,7 +239,7 @@ ax.add_patch(mp.Rectangle((GOAL[0] - ROBOT_W / 2, GOAL[1] - ROBOT_L / 2),
                           ROBOT_W, ROBOT_L, fc="none", ec="k", lw=1.1, ls="-", zorder=5))
 # 关键标注
 ax.annotate("east wall x=3.0", (2.85, 3.1), rotation=90, fontsize=9, color="brown")
-ax.annotate("wall C gap: x<0.7\n(path column x=0.36)", (0.42, 2.95),
+ax.annotate("wall C gap: x<1.05\n(path column x=0.36)", (0.62, 2.95),
             fontsize=8, color="darkred")
 ax.annotate("wall B east end x=2.0\n(inferred, verify)", (1.1, 2.10), fontsize=8, color="darkred")
 ax.legend(loc="lower left", fontsize=8, ncol=1)
