@@ -50,7 +50,7 @@
 #define PATH_HARD_MARGIN_M            0.015f
 #define PATH_SEGMENT_CUT_EPS_M        0.002f
 
-#define PATH_WAYPOINT_COUNT           64U    /* 路由工作容量(加密后) */
+#define PATH_WAYPOINT_COUNT           96U    /* 路由工作容量(长路线加密后 >64) */
 /* 路由直线段加密步长:长腿+少点的弦长参数化会让样条在拐角折叠
  * (kappa 数百,仿真复现);加密后节点均匀,拐角自然圆滑 */
 #define PATH_ROUTE_STEP_M             0.15f
@@ -143,6 +143,9 @@
 #define PATH_LD_K_S                   0.06f
 /* 曲率自适应前视上限:急弯处缩短前视距离 */
 #define PATH_LD_KAPPA_MAX_M           0.08f
+/* 前视下限:高曲率拐角处前视若被压到点间距以下,纯追踪目标会在
+ * 相邻点间振荡,车原地打转(仿真复现);下限 6cm > 2x点间距 3cm */
+#define PATH_LD_CAP_MIN_M              0.06f
 #define PATH_SEARCH_WINDOW            150U    /* 前向最近点搜索窗口 */
 #define PATH_SEARCH_BACK_WINDOW       40U     /* 回退窗口(过冲后找回最近点) */
 

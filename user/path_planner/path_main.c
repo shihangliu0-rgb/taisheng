@@ -1243,6 +1243,10 @@ static void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
         }
     }
     kappa_cap = PATH_LD_KAPPA_MAX_M / sqrtf(kappa_max + 0.05f);
+    if (kappa_cap < PATH_LD_CAP_MIN_M)
+    {
+        kappa_cap = PATH_LD_CAP_MIN_M;
+    }
 
     /* 急弯处缩短前视距离,抑制抄近道 */
     if (lookahead > kappa_cap)
@@ -1466,15 +1470,21 @@ static uint8_t densify_route(const path_waypoint_t *src, uint8_t n,
         uint16_t steps = (uint16_t)(len / PATH_ROUTE_STEP_M);
         uint16_t k;
 
+        /* 每段至少插 2 个中间点:2 点路线加密后 >= 4 个控制点,
+         * 满足 3 阶 B 样条下限(终点旁起点不再 STOP_BUILD) */
+        if (steps < 2U) { steps = 2U; }
+
         for (k = 1U; k <= steps; k++)
         {
             float t = (float)k / (float)(steps + 1U);
-            if (out >= max) { return out; }
+            /* 溢出判失败而非静默截断(截断会丢终点,车跑完
+             * 全程在终点前干等超时) */
+            if (out >= max) { return 0U; }
             dst[out].x_m = src[i - 1U].x_m + t * dx;
             dst[out].y_m = src[i - 1U].y_m + t * dy;
             out++;
         }
-        if (out >= max) { return out; }
+        if (out >= max) { return 0U; }
         dst[out++] = src[i];
     }
     return out;
@@ -1502,12 +1512,17 @@ static void resample_uniform(path_point_t *pts, uint16_t *count)
         return;
     }
 
-    /* 点数按长度自适应(约 3cm/点,上限 300):
-     * 固定 300 点会让短路线采样过密,厘米级微抖动被放大成
-     * kappa=90 的噪声尖峰(仿真复现,短路线 BUILD 必败) */
+    /* 点数按长度自适应:标准路线(>=6m)300 点;极短路线(<0.5m)
+     * 5cm/点(30 点对 0.25m 直线是 8mm 间隔,推离微扰动被放大成
+     * kappa=165 噪声,仿真复现);其余约 3cm/点 */
     if (total >= 6.0f)
     {
-        n_new = PATH_SPLINE_SAMPLES;   /* 标准路线保持 300 点 */
+        n_new = PATH_SPLINE_SAMPLES;
+    }
+    else if (total < 0.5f)
+    {
+        n_new = (uint16_t)(total / 0.05f);
+        if (n_new < 4U) { n_new = 4U; }
     }
     else
     {
@@ -1537,7 +1552,11 @@ static void resample_uniform(path_point_t *pts, uint16_t *count)
         }
     }
     pts[n_new - 1U] = temp[n_old - 1U];
-    (void)PathSpline_PushAwayFromWalls(pts, n_new, &inflated_map);
+    if (total >= 0.5f)
+    {
+        /* 短路线跳过推离:终点区直线远离墙,推离只引入扰动 */
+        (void)PathSpline_PushAwayFromWalls(pts, n_new, &inflated_map);
+    }
     update_arc_curvature(pts, n_new);
     *count = n_new;
 }
@@ -1637,6 +1656,17 @@ static bool validate_trajectory(const path_point_t *pts, uint16_t count,
             return false;
         }
         if (point_penetrates(hard_map, mx, my, PATH_SEGMENT_CUT_EPS_M))
+        {
+            return false;
+        }
+    }
+
+    /* 末点必须落在目标容差内(路由截断/终点丢失的兜底检测,
+     * 宁可 STOP_BUILD 不出车,也不跑 8 米干等超时) */
+    {
+        float gx = pts[count - 1U].x_m - PATH_GOAL_X_M;
+        float gy = pts[count - 1U].y_m - PATH_GOAL_Y_M;
+        if (sqrtf(gx * gx + gy * gy) > PATH_ARRIVE_TOL_M)
         {
             return false;
         }
