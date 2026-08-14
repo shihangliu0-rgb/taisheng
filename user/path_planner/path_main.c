@@ -1152,13 +1152,30 @@ static bool PathFusion_CalibrateSample(float gyro_z_deg_s)
     return false;
 }
 
-static void PathFusion_Predict(float gyro_z_deg_s, float dt_s)
+static void PathFusion_Predict(float gyro_z_deg_s, float dt_s,
+                            float vx_ch_ms, float vy_ch_ms)
 {
     float rate_deg_s = (gyro_z_deg_s + fusion.zero_offset_deg_s) *
                        PATH_GYRO_SIGN;
+    float c;
+    float s;
+    float vx_w;
+    float vy_w;
 
+    /* yaw 积分(陀螺) */
     fusion.yaw += rate_deg_s * DEG2RAD * dt_s;
     fusion.yaw = PathWrapAngle(fusion.yaw);
+
+    /* 位置前馈(指令速度里程计,修复"位姿中断->估计冻结->门限死锁"):
+     * 上一周期下发给底盘的指令速度(底盘系 x=右/y=前)经 R(-yaw) 转到
+     * 世界系积分进融合位置。位姿帧暂停期间估计值持续推进,帧恢复后
+     * 与门限的差保持很小,不会把健康机器人永久判死。 */
+    c = cosf(fusion.yaw);
+    s = sinf(fusion.yaw);
+    vx_w = vx_ch_ms * c - vy_ch_ms * s;
+    vy_w = vx_ch_ms * s + vy_ch_ms * c;
+    fusion.x += vx_w * dt_s;
+    fusion.y += vy_w * dt_s;
 }
 
 static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
@@ -1179,8 +1196,15 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     }
 
     /* xy 跳变门限(>20cm 单帧拒绝;同时满足规格"30cm 异常拒绝"):
-     * 用原始样本与上一融合值比较,通过则直接覆盖(无中值滤波滞后) */
-    if (fusion.have_upper)
+     * 用原始样本与上一融合值比较,通过则直接覆盖(无中值滤波滞后)。
+     * 重新捕获:数据过旧(估计长时间未被校正,如速度前馈漂移/打滑)
+     * 时跳过门限直接接受新帧,避免"正确帧被永久拒绝 -> 死锁停机"。 */
+    if (fusion.have_upper &&
+        ((uint32_t)(now_ms - fusion.last_data_ms) > PATH_FUSION_REACQ_MS))
+    {
+        /* 强制重捕获:直接落入下方覆盖逻辑 */
+    }
+    else if (fusion.have_upper)
     {
         dx = x_m - fusion.x;
         dy = y_m - fusion.y;
@@ -1558,6 +1582,7 @@ static bool num_ok(float v)
 
 /* 每个控制周期读一次真实传感器并做融合 */
 static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
+                                 float vx_ch_ms, float vy_ch_ms,
                                  imu_data_t *imu,
                                  float *laser_f_m, bool *laser_f_ok,
                                  float *laser_l_m, bool *laser_l_ok)
@@ -1593,7 +1618,9 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
 
     if (imu_ok)
     {
-        PathFusion_Predict(imu->gyro_z_deg_s, dt_s);
+        /* 上一周期下发的指令速度作为位置前馈(断帧期间估计持续推进) */
+        PathFusion_Predict(imu->gyro_z_deg_s, dt_s,
+                           vx_ch_ms, vy_ch_ms);
     }
 
     /* 上位机位姿(0x11 位置帧,field_w 为 yaw_rad;小电脑侧已修复,
@@ -1637,6 +1664,10 @@ static void runner_step(uint32_t now_ms, float dt_s)
     float v_ref;
     float v_used;
     float exp_l;
+    float exp_f;
+    float dir_body_x;
+    bool target_lateral;
+    bool expected_wall;
     float tx;
     float ty;
     float L;
@@ -1653,7 +1684,9 @@ static void runner_step(uint32_t now_ms, float dt_s)
     int16_t rpm_y;
     int16_t z;
 
-    imu_ok = runner_read_and_fuse(now_ms, dt_s, &imu,
+    imu_ok = runner_read_and_fuse(now_ms, dt_s,
+                                  last_cmd_vx, last_cmd_vy,
+                                  &imu,
                                   &laser_f, &laser_f_ok,
                                   &laser_l, &laser_l_ok);
     PathFusion_Get(&fx, &fy, &fyaw);
@@ -1727,6 +1760,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     last_i_near = i_near;
     v_ref = trajectory[i_near].v_ref;
     exp_l = trajectory[i_near].exp_laser_left_m;
+    exp_f = trajectory[i_near].exp_laser_front_m;   /* 此前算出未用,现参与期望墙门控 */
 
     /* 数据降级限速(在查表后、激光兜底前统一钳制) */
     if (PathFusion_DataAge(now_ms) > PATH_UPPER_DEGRADE_MS)
@@ -1747,40 +1781,63 @@ static void runner_step(uint32_t now_ms, float dt_s)
         L = 1e-3f;
     }
 
-    /* ---- 前激光兜底(真实 DT35 量程 5-20cm,固件钳位) ----
-     * 读数 == 上限:饱和,量程内无近距离障碍 -> 不约束速度;
-     * 读数在 (12cm, 20cm):按剩余距离限速;
-     * 读数 <= 12cm:完全停车(审计 P1:取消盲侧移,改为直接停机),
-     *   障碍消失后自动恢复。 */
+    /* ---- 前激光兜底(真实 DT35 量程 5-20cm + 期望墙门控) ----
+     * 饱和(>=20cm):量程内无障碍 -> 不约束;
+     * 期望墙在量程内(通道1/2 贴墙横移段,exp_f<=0.23)且读数与期望
+     * 相符(±5cm):位置正常 -> 不减速(消除饱和边界噪声抖动);
+     * 读数 <=12cm:目标横向且是期望墙 -> 0.25m/s 沿路径缓行回中
+     * (方向由纯追踪目标给出,非盲侧移);否则完全停车;
+     * 其余:按剩余距离限速。 */
     lf = laser_f;
     if (lf > PATH_LASER_MAX_RANGE_M)
     {
         lf = PATH_LASER_MAX_RANGE_M;
     }
 
+    /* 目标方向的车体纵向分量(车体 +x=前;世界系前向 = (-sin(yaw), cos(yaw))) */
+    {
+        float fwd_x = -sinf(fyaw);
+        float fwd_y = cosf(fyaw);
+        dir_body_x = ((tx - fx) / L) * fwd_x + ((ty - fy) / L) * fwd_y;
+    }
+    target_lateral = (fabsf(dir_body_x) <= PATH_LASER_LATERAL_DIR_MAX);
+    expected_wall = (exp_f <= (PATH_LASER_MAX_RANGE_M + 0.03f));
+
     if (lf >= (PATH_LASER_MAX_RANGE_M - 1e-4f))
     {
         v_used = v_ref;
-        vx_w = v_used * (tx - fx) / L;
-        vy_w = v_used * (ty - fy) / L;
+        reason = PATH_REASON_RUN;
+    }
+    else if (expected_wall &&
+             (lf >= (exp_f - PATH_LASER_EXPECTED_MARGIN_M)))
+    {
+        v_used = v_ref;
         reason = PATH_REASON_RUN;
     }
     else if (lf <= PATH_LASER_STOP_DIST_M)
     {
-        vx_w = 0.0f;
-        vy_w = 0.0f;
-        v_used = 0.0f;
-        reason = PATH_REASON_STOP_LASER_FRONT;
+        if (expected_wall && target_lateral)
+        {
+            v_used = (v_ref < PATH_LASER_RECOVERY_V_MS) ?
+                     v_ref : PATH_LASER_RECOVERY_V_MS;
+            reason = PATH_REASON_LASER_SLOW;
+        }
+        else
+        {
+            v_used = 0.0f;
+            reason = PATH_REASON_STOP_LASER_FRONT;
+        }
     }
     else
     {
         v_laser = sqrtf(2.0f * PATH_A_LON_BRAKE *
                         (lf - PATH_LASER_STOP_DIST_M));
         v_used = (v_ref < v_laser) ? v_ref : v_laser;
-        vx_w = v_used * (tx - fx) / L;
-        vy_w = v_used * (ty - fy) / L;
         reason = PATH_REASON_LASER_SLOW;
     }
+
+    vx_w = v_used * (tx - fx) / L;
+    vy_w = v_used * (ty - fy) / L;
 
     /* ---- 世界系 -> 底盘系(右/前),直接对应 Chassis_SetVelocity ---- */
     PathWorldToChassis(vx_w, vy_w, fyaw, &vx_c, &vy_c);
@@ -1985,7 +2042,8 @@ void PathRunner_Run(void)
             }
         }
 
-        (void)runner_read_and_fuse(now_ms, dt_s, &imu,
+        (void)runner_read_and_fuse(now_ms, dt_s, 0.0f, 0.0f,
+                                   &imu,
                                    &laser_f, &lf_ok, &laser_l, &ll_ok);
         break;
     }
@@ -1995,6 +2053,42 @@ void PathRunner_Run(void)
         PathGridMap_BuildReal(&real_map);
         PathGridMap_BuildInflated(&inflated_map);
         PathGridMap_BuildHardInflated(&hard_map);
+
+        /* 按实测起点动态生成前两个拐点(修复"仅覆盖 wp[0] 导致
+         * 偏离起点时首段扭曲 -> STOP_BUILD"),三分支:
+         *   1) start.y >= 1.12(已在墙1 北侧):垂直并入通道1;
+         *   2) start.x <= 0.8: L 形,垂直段在 x=start.x
+         *      (车右缘 +0.235 < 墙1 西端 1.05,不穿墙);
+         *   3) 其余(东南侧):先西行到 x=0.5(墙1 西端以西),再北上
+         *      y=1.65 并入通道 —— 与标称路线完全相同的 L 形,
+         *      斜线直接连拐角会被样条切进墙1 硬西北角(仿真复现
+         *      mid_pen + maxstep 0.23)。 */
+        {
+            float sx = waypoints[0].x_m;
+            float sy = waypoints[0].y_m;
+
+            if (sy >= 1.12f)
+            {
+                waypoints[1].x_m = sx;
+                waypoints[1].y_m = 1.65f;
+                waypoints[2].x_m = 1.4f;
+                waypoints[2].y_m = 1.65f;
+            }
+            else if (sx <= 0.8f)
+            {
+                waypoints[1].x_m = sx;
+                waypoints[1].y_m = 1.65f;
+                waypoints[2].x_m = 1.0f;
+                waypoints[2].y_m = 1.65f;
+            }
+            else
+            {
+                waypoints[1].x_m = 0.5f;
+                waypoints[1].y_m = sy;
+                waypoints[2].x_m = 0.5f;
+                waypoints[2].y_m = 1.65f;
+            }
+        }
 
         if (!PathSpline_Build(waypoints, PATH_WAYPOINT_COUNT,
                               trajectory, PATH_SPLINE_SAMPLES,
