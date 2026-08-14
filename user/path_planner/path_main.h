@@ -1,17 +1,4 @@
-/**
- ******************************************************************************
- * @file    path_main.h
- * @brief   曲线跑图:函数定义文件(场地配置在 path_config.h,实现在 path_main.c)
- *
- * 运行流程见 path_main.c 顶部注释,这里只列类型与对外接口。
- *
- * 外部数据(全部来自仓库已有模块):
- *   小电脑 0x11 位置帧 -> user/pc_link      PcLink_GetPosition()
- *   IMU 陀螺 / yaw      -> user/imu          ImuMain_GetData()
- *   前/左激光(DT35)     -> user/com_link     dt35_link[].distance_cm
- *   输出                 -> user/chassis_vesc Chassis_SetVelocity()
- ******************************************************************************
- */
+/* path_main.h - 跑曲线:类型与接口(说明见 README.md) */
 #ifndef PATH_MAIN_H
 #define PATH_MAIN_H
 
@@ -21,8 +8,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
-/* ---------------- 类型 ---------------- */
 
 /* 轴对齐矩形墙 */
 typedef struct
@@ -118,16 +103,14 @@ typedef struct
     uint32_t run_ms;
 } path_debug_t;
 
-/* ---------------- 运行入口(由 Core/Src/freertos.c 的 commTask 调用) ---------------- */
 void PathRunner_Init(void);
 void PathRunner_Run(void);
 void PathRunner_GetDebug(path_debug_t *debug);
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count);
 
-/* 指令仲裁:规划器 RUN 期间返回 true,computer_link.c 以此屏蔽手动速度指令 */
+/* 指令仲裁:规划器 RUN 期间返回 true */
 bool PathPlanner_OwnsChassis(void);
 
-/* ---------------- 几何辅助(调试/上位机可视化用) ---------------- */
 void PathGridMap_BuildReal(path_gridmap_t *map);
 void PathGridMap_BuildInflated(path_gridmap_t *map);
 void PathGridMap_BuildHardInflated(path_gridmap_t *map);   /* 验收用硬膨胀 */
@@ -142,7 +125,6 @@ void PathLaserRay(float robot_x, float robot_y, float yaw_user,
                   float *ox, float *oy, float *dx, float *dy);
 float PathWrapAngle(float angle_rad);
 
-/* ---------------- CSV 导出(调试串口,主机侧可存 speed_profile.csv) ---------------- */
 void PathSpeedProfile_DumpCsv(const path_point_t *points, uint16_t count,
                               UART_HandleTypeDef *uart);
 

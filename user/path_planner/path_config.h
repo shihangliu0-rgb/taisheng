@@ -1,65 +1,24 @@
-/**
- ******************************************************************************
- * @file    path_config.h
- * @brief   路径规划与控制集中配置(原 Python 方案 speed_profile_project 的
- *          field.yaml 全部内容 + 控制器可调参数,统一收敛到本文件)
- *
- * 每个宏后都注明其对应的 field.yaml 段,改参数只改本文件。
- ******************************************************************************
- */
+/* path_config.h - 场地与路径参数(改参数只改这里) */
 #ifndef PATH_CONFIG_H
 #define PATH_CONFIG_H
 
 #define PATH_PI                     3.14159265f   /* pi(float) */
 
-/* ==================================================================
- * 0. 总开关 / 控制周期 / 调试
- * ================================================================== */
 #define PATH_ENABLE                   1U     /* 1 = 启用路径规划与控制 */
 #define PATH_CONTROL_PERIOD_MS        5U     /* 控制周期,默认 200 Hz */
 #define PATH_MAX_RUN_MS               20000U /* 全程超时保护,超时主动停 */
 
-/* 调试打印:默认关闭。打开后每 400ms 向 PATH_DEBUG_UART_HANDLE 指定的
- * 空闲串口输出一行状态(阻塞发送,约 10ms@115200,只建议调试时打开)。 */
+/* 调试打印:默认关闭 */
 #define PATH_DEBUG                    0U
-/* #define PATH_DEBUG_UART_HANDLE    huart8 */
+/* #define PATH_DEBUG_UART_HANDLE huart8 */
 #define PATH_DEBUG_PERIOD_MS          400U
 
-/* ==================================================================
- * 1. 底盘单位换算(对接 Chassis_SetVelocity)
- * ==================================================================
- * chassis_main.c 的底盘坐标系: X 向右(平移)、Y 向前、Z 逆时针;
- * vx/vy 单位是轮子 RPM,z 是角速度控制量(内部乘
- * CHASSIS_ROTATION_SCALE = 3.5+3.30 = 6.8 转成轮子 RPM 差)。
- *
- * 参数来源(仓库内底盘解算,非估算):
- *   - 轮半径 0.050 m     : bteam/底盘分支 chassis/app/chassis/odom_fusion.h
- *                          ODOM_WHEEL_RADIUS_M = 0.050f
- *   - 轴距 0.35 / 轮距 0.33 : 抬升分支 chassis_main.c 的
- *                          CHASSIS_ROTATION_SCALE(3.5f + 3.30f)
- *
- * 推导(与两边代码闭合):
- *   PATH_RPM_PER_M_S = 60/(2*pi*r) = 190.99 rpm per m/s
- *   麦轮旋转项:轮线速度 = w * (轴距/2 + 轮距/2) = w * 0.34
- *   所需轮 RPM = w * 0.34 * 190.99 = 64.94 * w
- *   代码 rotation_rpm = z * 6.8 -> z = 64.94/6.8 * w = 9.549 * w
- *   即 PATH_Z_PER_RAD_S = 60/(2*pi) = 9.549(与 6.8、0.34、0.05 三值闭合)
- */
 #define PATH_WHEEL_RADIUS_M           0.050f
 #define PATH_RPM_PER_M_S              190.99f
-#define PATH_CHASSIS_ROT_ARM_M        0.34f   /* 轴距/2 + 轮距/2 = 0.175+0.165 */
-#define PATH_Z_PER_RAD_S              9.549f  /* = 60/(2*pi),z 控制量 per rad/s */
+#define PATH_CHASSIS_ROT_ARM_M        0.34f
+#define PATH_Z_PER_RAD_S              9.549f
 
-/* ==================================================================
- * 2. 场地几何(field.yaml: field / walls)
- * ================================================================== */
-/* 按用户实测信息更新(2026-08 场地):
- * - 东墙在 x=3.0(此前按 field.yaml 11m 场地是错的,实车在 x~3m 撞墙);
- * - 墙B东端 x=2.0:用户给出 D 角圆弧端点 (2.0,1.65)->(2.0,2.6),
- *   圆弧绕墙B东端,弦线必须不穿墙 -> 东端必在 x<=2.0,取 2.0;
- * - 墙C 延伸到东墙(间隙仍在 x<0.7,与 yaml 注释一致);
- * - y 方向与 field.yaml 相同。
- * 以上除"东墙 x=3.0、D 角圆弧端点"外均为反推,装车前请按实测复核。 */
+/* 按用户实测信息更新(2026-08 场地 */
 #define PATH_FIELD_W_M                3.0f    /* 真实场地:东墙在 x=3.0(用户提供) */
 #define PATH_FIELD_H_M                6.0f
 /* 位姿合法性范围(融合前校验) */
@@ -70,52 +29,31 @@
 #define PATH_WALL_THICKNESS_M         0.049f
 #define PATH_WALL_COUNT               7U
 
-/* 4 面外墙 + 3 面内部隔墙(wall_A 最南侧 / wall_B 中间 / wall_C 最北)。
- * 注意:wall_A 为用户实测坐标,wall_B 东端 x=2.0 与 wall_C 东端
- * 延伸到东墙亦为反推值;实测后如有出入直接改本表。 */
+/* 4 外墙 + 3 内墙 */
 #define PATH_WALLS_TABLE \
     {0.000f, 0.000f, 3.000f, 0.049f},   /* south 下墙(真实场地宽 3m) */ \
     {0.000f, 5.951f, 3.000f, 6.000f},   /* north 上墙 */ \
     {0.000f, 0.000f, 0.049f, 6.000f},   /* west  左墙 */ \
     {2.951f, 0.000f, 3.000f, 6.000f},   /* east  东墙(用户:x=3m 就是东墙) */ \
-    {1.05f, 1.07f, 3.00f, 1.12f},       /* wall_A 通道墙1(最南侧,用户实测坐标 2026-08) */ \
-    {0.000f, 2.075f, 2.000f, 2.125f},   /* wall_B 东端 x=2.0(按 D 角圆弧反推) */ \
+    {1.05f, 1.07f, 3.00f, 1.12f},       /* 墙1(南) */ \
+    {0.000f, 2.075f, 2.000f, 2.125f},   /* 墙B(东端x=2.0,反推) */ \
     {0.700f, 3.075f, 3.000f, 3.125f}    /* wall_C 延伸到东墙 */
 
-/* ==================================================================
- * 3. 机器人尺寸与膨胀(field.yaml: robot)
- * ================================================================== */
 #define PATH_ROBOT_LENGTH_M           0.617f
 #define PATH_ROBOT_WIDTH_M            0.44f
-/* 软膨胀余量(仅用于整形):0.04m。原 0.08m 时通道1 中心线 y=1.65
- * 距软边界仅 ~2cm,样条厘米级过冲即触发推离,产生阶梯尖峰与 S 形抖动;
- * 0.04m 后整形触发面后移,硬验收(0.015m)仍然兜底安全。 */
+/* 软膨胀余量(仅用于整形):0.04m */
 #define PATH_SAFETY_MARGIN_M          0.04f
-/* 路径膨胀:yaw 锁定(±2°)下机器人始终轴对齐,用矩形半宽/半长 + 安全余量
- * 作为膨胀量,比 field.yaml 的外接圆(半对角线 0.379+0.08=0.459)更精确:
- * 圆模型会把 wall_C 西侧缺口(x<0.7)压成 x<0.24,比车宽 0.44 还窄,
- * 导致绕墙 C 的通道物理不可行。矩形膨胀才是该姿态下的真实占位。 */
+/* 路径膨胀:yaw 锁定(±2°)下机器人始终轴对齐 */
 #define PATH_INFLATE_DX_M             (0.5f * PATH_ROBOT_WIDTH_M + PATH_SAFETY_MARGIN_M)   /* 0.30 */
 #define PATH_INFLATE_DY_M             (0.5f * PATH_ROBOT_LENGTH_M + PATH_SAFETY_MARGIN_M)  /* 0.3885 */
-/* 硬膨胀(轨迹验收用):机器人真实外廓 + 1.5cm。墙C西侧缺口等窄通道
- * 无法在"软膨胀+8cm余量"下绕行,验收以硬膨胀为准(软膨胀只用于整形);
- * 线段切角允许 2mm,采样直连弦与真实曲线的偏差即此量级 */
+/* 硬膨胀(轨迹验收用):机器人真实外廓 + 1.5cm */
 #define PATH_HARD_MARGIN_M            0.015f
 #define PATH_SEGMENT_CUT_EPS_M        0.002f
 
-/* ==================================================================
- * 4. 固定路线 waypoints(起点由上电位姿覆盖,真实场地 3m 宽)
- * ==================================================================
- * 与 field.yaml 的差异(D 角由用户实测给定):
- *   - 原 yaml 拐点 (2.5,2.1)/(2.5,2.6) 在真实场地已出界(x=3.0 即东墙),
- *     实际为绕墙B东端的 U 形半圆弧:(2.0,1.65) 起、(2.0,2.6) 止;
- *   - wall_C 西侧缺口(x<0.7)处补拐角点,路径走 x=0.36 通道列,
- *     经 (0.36,3.70) 北上,终点由 0.15m 到达判定触发。
- * 可视化核对:python3 map_check.py(本目录)。 */
 #define PATH_WAYPOINT_COUNT           21U
 #define PATH_WAYPOINTS_TABLE \
     {0.50f, 1.00f},   /* 名义起点占位:上电后由小电脑实测位姿整体覆盖 */ \
-    {0.50f, 1.65f},   /* 先北上到通道1 高度:墙1 西端 x=1.05,垂直段在 x=0.5 安全绕开 */ \
+    {0.50f, 1.65f},   /* 先北上到通道1 高度:墙1 西端 x=1.05 */ \
     {1.00f, 1.65f},   /* 通道1 左入口 */ \
     {2.00f, 1.65f},   /* D角圆弧起点(用户给定;-90 度) */ \
     {2.12f, 1.67f},   /* -75 度 */ \
@@ -123,65 +61,44 @@
     {2.34f, 1.79f},   /* -45 度 */ \
     {2.41f, 1.89f},   /* -30 度 */ \
     {2.46f, 2.00f},   /* -15 度 */ \
-    {2.48f, 2.13f},   /*   0 度(顶点,距东墙 x=3.0 留 0.52m) */ \
+    {2.48f, 2.13f},   /* 0度(顶点) */ \
     {2.46f, 2.25f},   /* +15 度 */ \
     {2.41f, 2.36f},   /* +30 度 */ \
     {2.34f, 2.46f},   /* +45 度 */ \
     {2.24f, 2.54f},   /* +60 度 */ \
     {2.12f, 2.58f},   /* +75 度 */ \
-    {2.00f, 2.60f},   /* D角圆弧终点(用户给定;+90 度)= 通道2 右入口 */ \
+    {2.00f, 2.60f},   /* D角圆弧终点 */ \
     {1.00f, 2.60f},   /* 通道2 左段 */ \
-    {0.375f, 2.60f},  /* 墙C西侧缺口入口(yaml 注释:必须走到 x<0.7 上翻) */ \
-    {0.36f, 2.66f},   /* 拐角过渡点:强制样条贴西侧绕 90 度角, \
-                         否则样条切角会扫进墙C硬区域(仿真复现) */ \
+    {0.375f, 2.60f},  /* 墙C缺口入口 */ \
+    {0.36f, 2.66f},   /* 拐角过渡点:强制样条贴西侧绕 90 度角 */ \
     {0.36f, 3.70f},   /* 缺口列直行北上 */ \
-    {0.50f, 3.70f}     /* 目标点:y=3.70 在墙C硬膨胀之上,水平东移安全,路径终点=目标 */
-    /* D 角圆弧:半圆 R=0.475,圆心 (2.0,2.125),每 15 度一个采样点,
-     * 密集弧点保证样条紧贴圆弧(平滑形变可忽略,不再被拉向弦线)。 */
+    {0.50f, 3.70f}     /* 目标点:y=3.70 在墙C硬膨胀之上 */
+    /* D 角圆弧:半圆 R=0.475 */
 
 #define PATH_GOAL_X_M                 0.50f
 #define PATH_GOAL_Y_M                 3.70f
 #define PATH_ARRIVE_TOL_M             0.15f
-/* 起点完全由小电脑首帧有效位姿给出(不是表内占位点):
- * WAIT_START 收到首帧"数值合法、在场内、|yaw|<=30 度"的位置帧后,
- * 用实测位姿整体覆盖 waypoints[0],不设与占位点的距离门限。
- * 表内 (0.5,1.0) 仅为名义起点注释,正常流程必然被覆盖;
- * 若实测起点离名义路线太远导致轨迹被墙拦断,BUILD 验收会拒绝并
- * STOP_BUILD(不会盲跑)。 */
-/* 起步朝向硬约束(P0-1):本任务物理前提是上电 yaw=0 朝 +y。
- * WAIT_START 收到首帧有效位姿后检查 |field_w|,超过该值直接
- * STOP_HEADING(比"yaw 门限锁死后全速撞墙"安全) */
+/* 起点=小电脑实测位姿 */
+/* 起步朝向 ±30° */
 #define PATH_START_YAW_LIMIT_DEG      30.0f
-/* CALIB 总超时(P1-5):IMU 未插/静默时不能永远卡在 CALIB */
+/* CALIB 总超时 */
 #define PATH_CALIB_TIMEOUT_MS         10000U
 
-/* ==================================================================
- * 5. B 样条(field.yaml: bspline)
- * ================================================================== */
 #define PATH_SPLINE_DEGREE            3U
 #define PATH_SPLINE_SAMPLES           300U
 /* 把落入膨胀墙的采样点沿距离场梯度外推 */
 #define PATH_PUSH_STEP_M              0.02f
 #define PATH_PUSH_MAX_ITERS           60U
-/* 推离 + 拉普拉斯平滑交替迭代轮数。
- * 0 = 只推离不平滑:圆弧由密集路点(每 15 度)保证形状,
- * 平滑会把弧线拉向弦线、在接头产生 S 形抖动(仿真复现卡死)。 */
+/* 推离 + 拉普拉斯平滑交替迭代轮数 */
 #define PATH_PUSH_SMOOTH_ROUNDS       0U
-/* 弯道半径:不做人为整形,完全按路点 + B 样条平滑 + 离墙推离生成;
- * 由速度剖面的曲率限速(v^2*|k| <= a_lat)与曲率自适应前视保证跟踪。
- * 安全以 BUILD 验收为准:墙表必须与真实场地一致(待用户提供实测坐标)。 */
+/* 弯道半径:不做人为整形 */
 #define PATH_SAMPLE_STEP_MAX_M        0.15f   /* 最大采样点间距 */
 #define PATH_MIN_CLEARANCE_M          0.02f   /* 中心路径到硬膨胀墙的最小净距 */
-#define PATH_KAPPA_HARD_MAX           50.0f   /* 验收硬上限(R=0.02):缺口窄 S 弯的
-                                                 固有尖峰,由速度剖面强制
-                                                 v<=sqrt(a_lat/|k|) 低速通过 */
+#define PATH_KAPPA_HARD_MAX           50.0f   /* κ硬上限 */
 #define PATH_LAT_ACC_TOL              1.20f   /* 横向加速度超限容差 */
 #define PATH_BUILD_MAX_ATTEMPTS       3U      /* 整形+验收的最大尝试次数 */
 #define PATH_REQUIRE_MOTORS           1U      /* 任一电机离线 -> 停车 */
 
-/* ==================================================================
- * 6. 速度剖面(field.yaml: speed_profile)
- * ================================================================== */
 #define PATH_V_MAX_MS                 1.5f
 #define PATH_V_START_MS               0.0f
 #define PATH_V_GOAL_MS                0.30f
@@ -189,52 +106,32 @@
 #define PATH_A_LAT_MAX                1.5f
 #define PATH_A_LON_ACCEL              1.2f
 #define PATH_A_LON_BRAKE              1.8f
-/* 剖面反向扫描使用的"跟踪刹车斜率":指令 slew 能力 2.0m/s^2 乘
- * 0.8 安全系数。若用物理刹车 1.8 作剖面斜率,机器人跟踪稍有滞后
- * 就会带着余速冲进急弯(仿真复现:1.65m/s 冲过缺口直角弯撞西墙)。 */
+/* 剖面反向扫描使用的"跟踪刹车斜率" */
 #define PATH_PROFILE_BRAKE_MS2        1.6f
-/* 曲率限速的弧长前视窗:前方 0.8m 内的最大曲率参与限速,
- * 让机器人在进入急弯前 0.8m 就降到弯道速度(减速余量 0.3m)。 */
+/* 曲率限速的弧长前视窗 */
 #define PATH_CURV_LOOKAHEAD_M         0.8f
 #define PATH_KAPPA_MIN                0.01f   /* 曲率下限,防止除零 */
 
-/* ==================================================================
- * 7. IMU + 上位机位姿互补融合(原 imu_fusion.py)
- * ================================================================== */
-#define PATH_FUSION_XY_GATE_M         0.15f   /* 单帧 xy 跳变门限(>15cm 拒绝:
-                                                 20cm 阶跃必拒;机器人最快 3cm/帧,
-                                                 正常运动远低于该门限) */
+#define PATH_FUSION_XY_GATE_M         0.15f   /* 单帧 xy 跳变门限(>15cm 拒绝 */
 #define PATH_FUSION_YAW_GATE_DEG      20.0f   /* yaw 与预测差 >20° 拒绝 */
 #define PATH_FUSION_YAW_GAIN          0.15f   /* yaw 低通拉回增益 */
 #define PATH_FUSION_UPPER_TIMEOUT_MS  500U    /* 链路丢失判定(CRC 有效帧刷新) */
 #define PATH_FUSION_CALIB_SAMPLES     200U    /* 静止标定采样帧数(约1s) */
-/* 数据可用性(通过 15cm/20 度门限才刷新):可用数据年龄超过
- * DEGRADE_MS 限速到 DEGRADE_V_MS,超过 DATA_STOP_MS 判定定位不可用停机 */
-#define PATH_UPPER_DEGRADE_MS         100U   /* 5 帧缺失即降速(P1-1:盲开窗口 <=100ms) */
-/* 重新捕获:数据过旧(估计值长时间未被校正)时跳过 xy 门限直接接受新帧。
- * 配合指令速度前馈(融合 predict 内),位姿中断后估计值持续推进,
- * 恢复后新帧与推进后估计的差在门限内,正常收敛;若推进误差大
- * (打滑等),过旧数据自动强制重捕获,不再永久拒绝 -> 不再死锁停机 */
+/* 数据可用性 */
+#define PATH_UPPER_DEGRADE_MS         100U   /* 缺帧降速 */
+/* 重新捕获 */
 #define PATH_FUSION_REACQ_MS          300U
 #define PATH_UPPER_DEGRADE_V_MS       0.30f
 #define PATH_UPPER_DATA_STOP_MS       800U
 #define PATH_GYRO_SIGN                1.0f    /* IMU z 轴与 yaw 反向时改 -1 */
 
-/* ==================================================================
- * 8. 纯追踪(原 pure_pursuit.py)
- * ================================================================== */
 #define PATH_LD_MIN_M                 0.08f
 #define PATH_LD_K_S                   0.06f
-/* 曲率自适应前视上限:急弯处缩短前视距离,防止纯追踪抄近道切墙。
- * D 角 U 形弯(κ=2.1,R=0.475)处前视被压到 ~0.07m,切角约 5mm,
- * 否则全速过弯会切进墙B东端角(仿真复现:3107 次碰撞) */
+/* 曲率自适应前视上限:急弯处缩短前视距离 */
 #define PATH_LD_KAPPA_MAX_M           0.08f
 #define PATH_SEARCH_WINDOW            150U    /* 前向最近点搜索窗口 */
 #define PATH_SEARCH_BACK_WINDOW       10U     /* 允许回退窗口(防过冲卡死) */
 
-/* ==================================================================
- * 9. 航向锁(原 yaw_lock.py)
- * ================================================================== */
 #define PATH_YAW_TARGET_RAD           0.0f    /* 锁定目标:车头朝 world +y */
 #define PATH_YAW_DEADZONE_DEG         1.0f
 #define PATH_YAW_KP_SMALL             1.5f
@@ -244,29 +141,20 @@
 #define PATH_W_SLOPE                  1.2f
 #define PATH_W_MIN_RAD_S              0.3f
 
-/* ==================================================================
- * 10. 激光兜底 / 横向微调(field.yaml: sensors + 原 profile_runner.py)
- * ================================================================== */
 #define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制停车 */
 #define PATH_LASER_MAX_RANGE_M        0.20f   /* 真实 DT35 量程 5-20cm(固件钳位) */
-/* 期望墙门控:轨迹期望前距 exp_front 落在量程内时(通道1/2 贴墙横移段,
- * 通道1 期望恰为 0.20m=饱和边界),读数 >= 期望-5cm 视为"位置正常"不减速,
- * 消除贴墙噪声在饱和边界的抖动;读数 <=12cm 且目标是横向时,允许
- * 0.25m/s 沿路径缓行回中(非盲侧移:方向由纯追踪目标给出,且期望墙
- * 说明前方是已知静态墙),否则停车。 */
+/* 期望墙门控 */
 #define PATH_LASER_EXPECTED_MARGIN_M  0.05f
 #define PATH_LASER_RECOVERY_V_MS      0.25f
 #define PATH_LASER_LATERAL_DIR_MAX    0.60f   /* 目标方向车体纵向分量阈值 */
-/* 无回波行为(P1-3):若实测 DT35 无回波上报 0cm,置 1 把 0 视为超程无障碍;
- * 若实测无回波上报 20cm(钳位)则本开关无效。以台架实测为准。 */
+/* 无回波=0 视为超程 */
 #define PATH_LASER_NO_ECHO_FREE       1U
 #define PATH_LASER_TIMEOUT_MS         500U    /* 与 dt35_pnp_link 的离线判据一致 */
 #define PATH_STOP_ON_LASER_LOSS       1U      /* 前激光离线 -> 停车 */
-/* 横向微调:err = laser_left - expected_left[i],叠加在底盘 x(向右)上 */
+
 #define PATH_LAT_TRIM_KP              1.5f
 #define PATH_LAT_TRIM_MAX_MS          0.30f
-/* 注意: 符号待实测:底盘系 x=向右,离左墙太近(err<0)应向右修正 -> 取负号。
- *    若实车反而朝墙贴,把这里改成 +1.0f。 */
+/* 横向微调符号 */
 #define PATH_LAT_TRIM_SIGN            (-1.0f)
 #define PATH_LAT_SAFE_M               0.10f   /* 左激光 <10cm 强制向右修正 */
 
@@ -276,9 +164,6 @@
 #define PATH_LASER_LEFT_X_M           0.0f
 #define PATH_LASER_LEFT_Y_M           0.175f
 
-/* ==================================================================
- * 11. 指令 slew-rate 限幅(原关键设计原则)
- * ================================================================== */
 #define PATH_SLEW_XY_ACCEL_MS2        2.0f
 #define PATH_SLEW_W_ACCEL_RADS2       4.0f
 

@@ -1,39 +1,4 @@
-/**
- ******************************************************************************
- * @file    path_main.c
- * @brief   曲线跑图实现(场地配置 path_config.h + 函数定义 path_main.h + 本文件)
- *
- * 完整运行流程(上电后自动执行):
- *
- *   INIT       -> 关闭 IMU 模块自带航向保持(本模块用自己的 yaw-lock)
- *   CALIB      -> 静止采 IMU 陀螺零偏(ImuMain_GetData,200 帧约 1s)
- *   WAIT_START -> 读小电脑 0x11 位置帧(PcLink_GetPosition)覆盖起点;
- *                 起步朝向 |yaw|>30 度直接 STOP_HEADING(任务前提:朝 +y 起步)
- *   BUILD      -> 路点(path_config.h)-> B 样条 -> 离墙外推 + 最小转弯半径整形
- *                 -> 速度剖面(曲率限速 + 双向扫描)+ 前/左激光期望距离表
- *   RUN(5ms)   -> 1) IMU 陀螺积分预测 yaw
- *                 2) 读小电脑位姿:数值/场地范围校验 + 15cm 单帧跳变门限 +
- *                    20 度 yaw 门限,通过后直接覆盖融合(新帧去重)
- *                 3) 读前/左激光(dt35_link[].distance_cm,UART9 DT35 帧,
- *                    真实量程 5-20cm,读数饱和=无近距离障碍)
- *                 4) 最近点查表 v_ref(允许小幅回退防过冲)
- *                 5) 前激光兜底:读数<20cm 时 v_used=min(v_ref,
- *                    sqrt(2*a_brake*(d-0.12)));d<=12cm 完全停车(不盲侧移),
- *                    障碍消失自动恢复
- *                 6) 纯追踪(曲率自适应前视)算世界系速度矢量
- *                 7) 世界系 -> 底盘系(R(yaw))-> Chassis_SetVelocity(RPM 单位)
- *                 8) 左激光横向微调(仅当期望距离在量程内)+ yaw-lock 出 w
- *                    + slew-rate 限幅 + 电机在线检查
- *   ARRIVED    -> 距终点 0.15m 内停车(刹车锁存)
- *   降级策略  -> 可用数据年龄>300ms 限速 0.3m/s,>800ms 判定定位不可用停机;
- *                 链路存活按 CRC 有效帧刷新(被门限拒绝的帧不触发链路超时)
- *   STOPPED    -> 位姿丢失/从未收到位姿 / 起步朝向超限 / IMU 离线(含 10s
- *                 校准超时) / 前激光<12cm / 电机离线 / NaN / 20s 超时
- *                 均停车(显式 SET_BRAKE);终态只停一次,之后手动可接管
- *
- * 同时通过 PcLink_SetStatus 回传 0x20 状态帧,小电脑据此判断控制器在线。
- ******************************************************************************
- */
+/* path_main.c - 跑曲线实现(流程/算法见 README.md) */
 #include "path_main.h"
 
 /* 仓库已有模块(全部真实外设数据) */
@@ -53,18 +18,9 @@
 #define DEG2RAD (float)(PATH_PI / 180.0)
 #define RAD2DEG (float)(180.0 / PATH_PI)
 
-/* ================================================================
- * 模块:几何工具:墙 / 膨胀 / 射线投射 / 坐标变换
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_geometry.c
- * @brief   几何工具实现:墙 / 距离场 / 射线投射 / 坐标变换
- ******************************************************************************
- */
+/* 几何工具 */
 
-
-/* field.yaml walls 段(wall_A 已注释,未启用) */
+/* 墙表 */
 static const path_wall_t real_walls[PATH_WALL_COUNT] =
 {
     PATH_WALLS_TABLE
@@ -106,7 +62,7 @@ void PathGridMap_BuildInflated(path_gridmap_t *map)
     map->count = PATH_WALL_COUNT;
 }
 
-/* 硬膨胀:真实外廓 + PATH_HARD_MARGIN_M,轨迹验收用(静态缓冲) */
+/* 硬膨胀 */
 static path_wall_t hard_walls[PATH_WALL_COUNT];
 
 void PathGridMap_BuildHardInflated(path_gridmap_t *map)
@@ -130,7 +86,6 @@ void PathGridMap_BuildHardInflated(path_gridmap_t *map)
     map->count = PATH_WALL_COUNT;
 }
 
-/* ------------------------------------------------------------------ */
 static bool wall_contains(const path_wall_t *w, float x, float y)
 {
     return (x >= w->xmin) && (x <= w->xmax) &&
@@ -152,7 +107,7 @@ static float wall_dist_to(const path_wall_t *w, float x, float y)
     return sqrtf(dx * dx + dy * dy);
 }
 
-/* AABB 射线相交(Slab 法),方向为单位向量 */
+/* AABB 射线相交(Slab 法) */
 static float wall_ray_cast(const path_wall_t *w,
                            float ox, float oy,
                            float dx, float dy,
@@ -168,7 +123,7 @@ static float wall_ray_cast(const path_wall_t *w,
 
     if (fabsf(dx) < 1e-9f)
     {
-        /* 射线平行于 y 轴方向分量:若原点在墙 x 范围外则不相交 */
+        /* 射线平行于 y 轴方向分量 */
         if ((ox < w->xmin) || (ox > w->xmax))
         {
             return max_range;
@@ -224,7 +179,6 @@ static float wall_ray_cast(const path_wall_t *w,
     return (tmin < 0.0f) ? 0.0f : tmin;
 }
 
-/* ------------------------------------------------------------------ */
 static bool PathGridMap_Contains(const path_gridmap_t *map, float x, float y)
 {
     uint8_t i;
@@ -294,7 +248,7 @@ float PathGridMap_RayCast(const path_gridmap_t *map,
     return best;
 }
 
-/* 找到包含该点的墙(点必须确实在某墙内),沿最小穿透轴推出 */
+/* 找包含该点的墙 */
 static bool push_out_one(const path_gridmap_t *map, float *x, float *y,
                          float step_m)
 {
@@ -364,7 +318,6 @@ static bool PathGridMap_PushOut(const path_gridmap_t *map, float *x, float *y,
     return !PathGridMap_Contains(map, *x, *y);
 }
 
-/* ------------------------------------------------------------------ */
 float PathWrapAngle(float angle_rad)
 {
     while (angle_rad > PATH_PI)
@@ -381,7 +334,7 @@ float PathWrapAngle(float angle_rad)
 static void PathBodyToWorld(float vx_b, float vy_b, float yaw_user,
                      float *vx_w, float *vy_w)
 {
-    /* θ = yaw + π/2:yaw=0(朝 +y)时车体 +x 应指向世界 +y */
+    /* θ = yaw + π/2 */
     float theta = yaw_user + (float)(PATH_PI / 2.0);
     float c = cosf(theta);
     float s = sinf(theta);
@@ -393,7 +346,7 @@ static void PathBodyToWorld(float vx_b, float vy_b, float yaw_user,
 static void PathWorldToChassis(float vx_w, float vy_w, float yaw_user,
                         float *vx_c, float *vy_c)
 {
-    /* 底盘系 x=右、y=前,恰为世界系旋转 yaw(车体系再转 -90°) */
+
     float c = cosf(yaw_user);
     float s = sinf(yaw_user);
 
@@ -416,7 +369,7 @@ void PathLaserRay(float robot_x, float robot_y, float yaw_user,
                   float dir_body_x, float dir_body_y,
                   float *ox, float *oy, float *dx, float *dy)
 {
-    /* 挂载点:车体系 -> 世界系(R(yaw+π/2)) */
+    /* 挂载点 */
     PathBodyToWorld(mount_body_x, mount_body_y, yaw_user, ox, oy);
     *ox += robot_x;
     *oy += robot_y;
@@ -425,22 +378,11 @@ void PathLaserRay(float robot_x, float robot_y, float yaw_user,
     PathBodyToWorld(dir_body_x, dir_body_y, yaw_user, dx, dy);
 }
 
-/* ================================================================
- * 模块:B 样条平滑 + 离墙外推 + 最小转弯半径整形
- * ================================================================ */
+/* B 样条平滑 */
 
-/* 前向声明:PathSpline_Finalize 在前,PathSpline_PushAwayFromWalls 定义在后 */
 static uint16_t PathSpline_PushAwayFromWalls(path_point_t *points,
                                              uint16_t count,
                                              const path_gridmap_t *inflated_map);
-
-/**
- ******************************************************************************
- * @file    path_spline.c
- * @brief   B 样条实现:de Boor 递推、导数、弧长、曲率、离墙外推
- ******************************************************************************
- */
-
 
 #define MAX_CTRL        (PATH_WAYPOINT_COUNT + 1U)  /* 控制点上限 */
 #define MAX_KNOTS       (MAX_CTRL + PATH_SPLINE_DEGREE + 1U)
@@ -449,7 +391,6 @@ static uint16_t PathSpline_PushAwayFromWalls(path_point_t *points,
 /* 前向声明:Build 末尾调用 */
 static void update_arc_curvature(path_point_t *points, uint16_t count);
 
-/* de Boor 求值:返回曲线值 out,导数 dout(dout 可为 NULL) */
 static void deboor(const float *ctrl_x, const float *ctrl_y,
                    const float *knots, uint8_t n_ctrl, uint8_t degree,
                    float u, float *out_x, float *out_y)
@@ -462,10 +403,7 @@ static void deboor(const float *ctrl_x, const float *ctrl_y,
     float alpha;
     int16_t k_int;
 
-    /* 找到 span k:u 在 [U_k, U_{k+1})。
-     * 修复:u==1 时跨度搜索会得到 k==n_ctrl,后续读 ctrl_x[n_ctrl] 越界
-     * (审计 ASan 复现)。clamped 样条在 u==1 的正确跨度为 n_ctrl-1,
-     * 钳位后曲线端点仍等于末控制点。 */
+    /* 找到 span k:u 在 [U_k, U_{k+1} */
     k = degree;
     while ((k + 1U < n_ctrl + degree) && (u >= knots[k + 1U]))
     {
@@ -567,8 +505,6 @@ static bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
         chord[i] /= total;
     }
 
-    /* --- 2. clamped 弦长平均 knot vector ---
-     * U[0..p]=0,U[p+j]=chord[j](j=1..n-p-1),U[n..n+p]=1 */
     for (i = 0U; i <= p; i++)
     {
         knots[i] = 0.0f;
@@ -591,7 +527,7 @@ static bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
 
         deboor(ctrl_x, ctrl_y, knots, n, p, u, &px, &py);
 
-        /* 切线:用前后采样点中心差分(最后一个点与自身差分) */
+        /* 切线 */
         u += 1e-4f;
         if (u > 1.0f)
         {
@@ -626,7 +562,6 @@ static bool PathSpline_Build(const path_waypoint_t *waypoints, uint8_t n_wp,
     return true;
 }
 
-/* ---------------- 弧长/曲率(推离或平滑后需重算) ---------------- */
 static void update_arc_curvature(path_point_t *points, uint16_t count)
 {
     uint16_t sample;
@@ -656,7 +591,7 @@ static void update_arc_curvature(path_point_t *points, uint16_t count)
                              sqrtf(dx * dx + dy * dy);
     }
 
-    /* 曲率 κ = dθ/ds(中心差分 + 2 遍 3 点平滑) */
+    /* 曲率 κ = dθ/ds */
     for (sample = 1U; sample < count - 1U; sample++)
     {
         ds = points[sample + 1U].s_m - points[sample - 1U].s_m;
@@ -689,7 +624,6 @@ static void update_arc_curvature(path_point_t *points, uint16_t count)
     }
 }
 
-/* ---------------- 平滑与最终化 ---------------- */
 static void smooth_xy(path_point_t *points, uint16_t count, uint8_t passes)
 {
     uint16_t sample;
@@ -700,9 +634,7 @@ static void smooth_xy(path_point_t *points, uint16_t count, uint8_t passes)
         return;
     }
 
-    /* 拉普拉斯平滑:new[i] = 0.5*p[i] + 0.25*(p[i-1]+p[i+1]),
-     * 首尾端点固定不动(起点/终点必须严格保留)。与"窗口移动平均"相比,
-     * 不会在端点附近产生步长跳变与锯齿。 */
+    /* 拉普拉斯平滑 */
     for (pass = 0U; pass < passes; pass++)
     {
         float prev_x = points[0].x_m;
@@ -723,11 +655,7 @@ static void smooth_xy(path_point_t *points, uint16_t count, uint8_t passes)
     }
 }
 
-/* 曲率整形:把曲率超限(转弯半径过小)的点沿弯道外侧推开。
- * 说明:本场地的两个关键拐角(D 角与 wall_C 西侧拐角)墙角都在弯道
- * 内侧,内切圆弧会擦墙(离墙角 0.2~0.34m < 车角半径 0.379m),
- * 必须使用"外侧绕行"的弧线 —— 即把转弯点向弯道外侧推,让路径
- * 先远离墙再转弯。逐点外推 + 平滑交替迭代即可收敛成这种形状。 */
+/* 曲率整形:把曲率超限(转弯半径过小)的点沿弯道外侧推开 */
 static void PathSpline_Finalize(path_point_t *points, uint16_t count,
                          const path_gridmap_t *inflated_map)
 {
@@ -738,17 +666,14 @@ static void PathSpline_Finalize(path_point_t *points, uint16_t count,
         return;
     }
 
-    /* 推离(硬约束:点必须出膨胀墙)+ 拉普拉斯平滑(保持形状)交替迭代,
-     * 收敛为绕膨胀墙的连续路径。弯道半径由路点 fillet 保证
-     * (path_config.h 路点表),速度剖面按实测曲率限速。 */
+    /* 推离(硬约束) */
     for (round = 0U; round < PATH_PUSH_SMOOTH_ROUNDS; round++)
     {
         (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
         smooth_xy(points, count, 1U);
     }
     (void)PathSpline_PushAwayFromWalls(points, count, inflated_map);
-    /* 平滑轮数为 0 时只推离:密集弧点路点下样条紧贴圆弧,
-     * 平滑只会引入接头 S 形抖动 */
+    /* 平滑轮数为 0 时只推离:密集弧点路点下样条紧贴圆弧 */
     if (PATH_PUSH_SMOOTH_ROUNDS > 0U)
     {
         smooth_xy(points, count, 1U);
@@ -786,16 +711,7 @@ static uint16_t PathSpline_PushAwayFromWalls(path_point_t *points, uint16_t coun
     return pushed;
 }
 
-/* ================================================================
- * 模块:离线速度剖面 + 期望激光查表 + CSV 导出
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_speed_profile.c
- * @brief   离线速度剖面生成 + 最近点查表 + CSV 串口输出
- ******************************************************************************
- */
-
+/* 离线速度剖面 */
 
 static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
                             const path_gridmap_t *real_map)
@@ -846,7 +762,7 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* --- 3. 反向扫描(刹车能力,用跟踪斜率带安全系数) --- */
+    /* 3. 反向扫描 */
     points[count - 1U].v_ref = PATH_V_GOAL_MS;
     for (i = count - 1U; i > 0U; i--)
     {
@@ -863,8 +779,7 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* 最低巡航速度(终点除外)。注意包含起点:否则 v[0]=0 会让机器人
-     * 在轨迹索引 0 处查表得 0 速度,永远无法起步(死锁)。 */
+    /* 最低巡航速度 */
     for (i = 0U; i + 1U < count; i++)
     {
         if (points[i].v_ref < PATH_V_MIN_MS)
@@ -873,12 +788,7 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* 最终曲率封顶(带弧长前视窗):用"前方 0.8m 弧长内的最大曲率"
-     * 限速 v <= sqrt(a_lat/k_eff)。只看当前点曲率时,急弯前 0.3m 处
-     * 的速度仍然很高,而 slew 限幅(2m/s^2)在高速下转向能力不足,
-     * 机器人会冲出急弯(仿真复现:1.15m/s 冲过缺口直角弯甩出 0.17m
-     * 撞西墙)。0.8m 前视窗让速度在进入弯道前就降到位,并给命令
-     * 减速留 0.3m 余量。 */
+    /* 曲率封顶(0.8m 前视窗) */
     for (i = 0U; i < count; i++)
     {
         float k_abs = fabsf(points[i].kappa);
@@ -910,10 +820,10 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
         }
     }
 
-    /* --- 4. 期望激光表(yaw 锁定 0,车头朝 +y) --- */
+    /* 4. 期望激光表 */
     for (i = 0U; i < count; i++)
     {
-        /* 前激光:挂 (0.225, 0),朝车体 +x(前方) */
+
         PathLaserRay(points[i].x_m, points[i].y_m, PATH_YAW_TARGET_RAD,
                      PATH_LASER_FRONT_X_M, PATH_LASER_FRONT_Y_M,
                      1.0f, 0.0f, &ox, &oy, &dx, &dy);
@@ -921,7 +831,6 @@ static bool PathSpeedProfile_Build(path_point_t *points, uint16_t count,
                                                           dx, dy,
                                                           PATH_LASER_MAX_RANGE_M);
 
-        /* 左激光:挂 (0, 0.175),朝车体 +y(正左) */
         PathLaserRay(points[i].x_m, points[i].y_m, PATH_YAW_TARGET_RAD,
                      PATH_LASER_LEFT_X_M, PATH_LASER_LEFT_Y_M,
                      0.0f, 1.0f, &ox, &oy, &dx, &dy);
@@ -953,7 +862,7 @@ static uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t co
         hint = (uint16_t)(count - 1U);
     }
 
-    /* 允许小幅回退:过冲后能找回最近点,而不是卡在窗口末尾 */
+    /* 允许小幅回退:过冲后能找回最近点 */
     start = (hint > PATH_SEARCH_BACK_WINDOW) ?
             (uint16_t)(hint - PATH_SEARCH_BACK_WINDOW) : 0U;
     end = hint + PATH_SEARCH_WINDOW;
@@ -975,7 +884,7 @@ static uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t co
         }
     }
 
-    /* 最近点已到窗口末尾且尚未到轨迹尾,整体前移,避免卡住 */
+    /* 最近点已到窗口末尾且尚未到轨迹尾 */
     if ((best_i >= end) && (end < count - 1U))
     {
         best_i = end;
@@ -984,14 +893,12 @@ static uint16_t PathSpeedProfile_Nearest(const path_point_t *points, uint16_t co
     return best_i;
 }
 
-/* ---------------- CSV 输出 ---------------- */
-
 static void uart_puts(UART_HandleTypeDef *uart, const char *s)
 {
     (void)HAL_UART_Transmit(uart, (uint8_t *)s, (uint16_t)strlen(s), 10U);
 }
 
-/* 手写浮点格式化(2 位小数),不依赖 printf/snprintf 重定向与 microlib 行为 */
+/* 手写浮点格式化 */
 static void uart_putf(UART_HandleTypeDef *uart, float v)
 {
     char buf[24];
@@ -1096,18 +1003,7 @@ void PathSpeedProfile_DumpCsv(const path_point_t *points, uint16_t count,
     }
 }
 
-/* ================================================================
- * 模块:IMU + 上位机位姿互补融合
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_fusion.c
- * @brief   IMU + 上位机位姿互补融合实现
- ******************************************************************************
- */
-
-
-
+/* IMU */
 
 typedef struct
 {
@@ -1143,7 +1039,7 @@ static bool PathFusion_CalibrateSample(float gyro_z_deg_s)
 
     if (fusion.calib_count >= PATH_FUSION_CALIB_SAMPLES)
     {
-        /* 附加零偏 = -均值(抵消 IMU 内置零偏修正后的残余误差) */
+        /* 附加零偏 = -均值 */
         fusion.zero_offset_deg_s =
             -(fusion.calib_sum / (float)fusion.calib_count);
         return true;
@@ -1166,10 +1062,7 @@ static void PathFusion_Predict(float gyro_z_deg_s, float dt_s,
     fusion.yaw += rate_deg_s * DEG2RAD * dt_s;
     fusion.yaw = PathWrapAngle(fusion.yaw);
 
-    /* 位置前馈(指令速度里程计,修复"位姿中断->估计冻结->门限死锁"):
-     * 上一周期下发给底盘的指令速度(底盘系 x=右/y=前)经 R(-yaw) 转到
-     * 世界系积分进融合位置。位姿帧暂停期间估计值持续推进,帧恢复后
-     * 与门限的差保持很小,不会把健康机器人永久判死。 */
+    /* 位置前馈 */
     c = cosf(fusion.yaw);
     s = sinf(fusion.yaw);
     vx_w = vx_ch_ms * c - vy_ch_ms * s;
@@ -1185,8 +1078,7 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     float dy;
     float yaw_err_rad;
 
-    /* 数值合法性与场地范围校验:非法帧不参与融合,也不更新时间戳,
-     * 即"坏数据不能喂活看门狗" */
+    /* 数值合法性与场地范围校验:非法帧不参与融合 */
     if ((x_m != x_m) || (y_m != y_m) || (yaw_rad != yaw_rad) ||
         (x_m < PATH_POSE_X_MIN_M) || (x_m > PATH_POSE_X_MAX_M) ||
         (y_m < PATH_POSE_Y_MIN_M) || (y_m > PATH_POSE_Y_MAX_M))
@@ -1195,10 +1087,7 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         return false;
     }
 
-    /* xy 跳变门限(>20cm 单帧拒绝;同时满足规格"30cm 异常拒绝"):
-     * 用原始样本与上一融合值比较,通过则直接覆盖(无中值滤波滞后)。
-     * 重新捕获:数据过旧(估计长时间未被校正,如速度前馈漂移/打滑)
-     * 时跳过门限直接接受新帧,避免"正确帧被永久拒绝 -> 死锁停机"。 */
+    /* xy 门限 */
     if (fusion.have_upper &&
         ((uint32_t)(now_ms - fusion.last_data_ms) > PATH_FUSION_REACQ_MS))
     {
@@ -1215,16 +1104,14 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         }
     }
 
-    /* 首帧:yaw 全量初始化(P0-1 修复)。原先 0.15 增益会把手帧
-     * yaw=π(朝 -y)折叠成 0.47rad,后续帧与估计值差 2.67rad 远超
-     * 20 度门限 -> 每一帧都被拒,yaw 锁死导致全速朝错误方向行驶。 */
+    /* 首帧 yaw 全量初始化 */
     if (!fusion.have_upper)
     {
         fusion.yaw = yaw_rad;
     }
     else
     {
-        /* yaw 门限(与估计值差 >20° 拒绝 yaw 分量,xy 照常融合) */
+        /* yaw 门限 */
         yaw_err_rad = fabsf(PathWrapAngle(yaw_rad - fusion.yaw));
         if (yaw_err_rad > PATH_FUSION_YAW_GATE_DEG * DEG2RAD)
         {
@@ -1238,10 +1125,7 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
         }
     }
 
-    /* xy 直接覆盖;只有通过全部校验的帧才刷新"数据时间";
-     * "链路时间"由 PathFusion_TouchLink 在收到任何 CRC 有效帧时刷新,
-     * 两者分离:跳变帧被门限拒绝不会触发链路超时,但长时间无可用
-     * 数据会触发降速/停机(见 DataAge 使用处) */
+    /* xy 直接覆盖 */
     fusion.x = x_m;
     fusion.y = y_m;
     fusion.have_upper = true;
@@ -1251,8 +1135,7 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     return true;
 }
 
-/* 收到任何 CRC 有效的位置帧即刷新链路存活时间(P1-2 修复:
- * 被 15cm/20 度门限拒绝的帧仍证明链路健康,不应触发 STOP_UPPER_LOST) */
+/* 链路存活刷新 */
 static void PathFusion_TouchLink(uint32_t now_ms)
 {
     fusion.last_upper_ms = now_ms;
@@ -1260,7 +1143,7 @@ static void PathFusion_TouchLink(uint32_t now_ms)
 
 static bool PathFusion_IsUpperLost(uint32_t now_ms)
 {
-    /* 从未收到位姿视为"未就绪/丢失",禁止把无数据当成健康状态 */
+
     if (!fusion.have_upper)
     {
         return true;
@@ -1269,8 +1152,6 @@ static bool PathFusion_IsUpperLost(uint32_t now_ms)
            PATH_FUSION_UPPER_TIMEOUT_MS;
 }
 
-/* 最近一次"被接受"数据的年龄(ms):连续跳变/噪声导致数据长期被拒时
- * 该值持续增长,用于降速与定位不可用停机 */
 static uint32_t PathFusion_DataAge(uint32_t now_ms)
 {
     if (!fusion.have_upper)
@@ -1318,17 +1199,7 @@ static void PathFusion_GetStats(uint32_t *xy_rejects, uint32_t *yaw_rejects,
     }
 }
 
-/* ================================================================
- * 模块:纯追踪前视目标
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_pure_pursuit.c
- * @brief   纯追踪实现
- ******************************************************************************
- */
-
-
+/* 纯追踪前视目标 ================================================================ */
 
 static void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
                           float x, float y, float v_ref, float kappa,
@@ -1340,9 +1211,7 @@ static void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
     float kappa_cap;
     uint16_t i;
 
-    /* 前视限幅用"前方窗口内最大曲率"(而非当前点曲率):
-     * 直角弯前 0.2m 处的 κ≈0,只看当前点会让机器人以全速+长前视
-     * 切进急弯(仿真复现:甩出 0.19m 撞西墙)。窗口约 15 个采样点。 */
+    /* 前视窗口内最大曲率 */
     kappa_max = fabsf(kappa);
     for (i = i_near + 1U;
          (i < count) && (i <= i_near + 15U); i++)
@@ -1391,18 +1260,7 @@ static void PathPurePursuit_Find(const path_point_t *points, uint16_t count,
     if (ty != NULL) { *ty = points[count - 1U].y_m; }
 }
 
-/* ================================================================
- * 模块:航向锁定
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_yaw_lock.c
- * @brief   航向锁定实现
- ******************************************************************************
- */
-
-
-
+/* 航向锁定 ================================================================ */
 
 static float PathYawLock_Step(float yaw_rad, float speed_ms)
 {
@@ -1439,24 +1297,13 @@ static float PathYawLock_Step(float yaw_rad, float speed_ms)
     return w;
 }
 
-/* ================================================================
- * 模块:在线跟踪总控(对接仓库已有模块)
- * ================================================================ */
-/**
- ******************************************************************************
- * @file    path_runner.c
- * @brief   在线跟踪总控实现(离线剖面查表 + 纯追踪 + 激光兜底 + 航向锁)
- ******************************************************************************
- */
-
+/* 在线跟踪总控(对接仓库已有模块) ================================================================ */
 
 /* 仓库已有模块(全部真实外设数据) */
-
 
 #if PATH_DEBUG
 #endif
 
-/* ------------------------------------------------------------------ */
 static path_point_t trajectory[PATH_SPLINE_SAMPLES];
 static uint16_t trajectory_count;
 static path_gridmap_t real_map;
@@ -1483,7 +1330,6 @@ static float last_cmd_vx;
 static float last_cmd_vy;
 static float last_cmd_w;
 
-/* ------------------------------------------------------------------ */
 static void runner_stop(path_reason_t why)
 {
     state = PATH_STATE_STOPPED;
@@ -1494,8 +1340,7 @@ static void runner_stop(path_reason_t why)
     Chassis_StopAll();
 }
 
-/* 线段中点穿透检查:直连弦相对真实曲线允许 eps 的切角偏差
- * (采样点之间的直线段最多切进膨胀墙 eps 深,膨胀墙含 8cm 安全余量) */
+/* 线段中点穿透检查 */
 static bool point_penetrates(const path_gridmap_t *map, float x, float y,
                              float eps)
 {
@@ -1513,9 +1358,7 @@ static bool point_penetrates(const path_gridmap_t *map, float x, float y,
     return false;
 }
 
-/* 轨迹验收(P0-2):进入 RUN 前强制校验,不通过 -> STOP_BUILD。
- * 校验项:数值合法性 / 曲率上限(含容差) / 横向加速度上限(含容差) /
- * 采样点与线段中点对膨胀墙的最小净距 / 采样间距。 */
+/* 轨迹验收(P0-2):进入 RUN 前强制校验 */
 static bool validate_trajectory(const path_point_t *pts, uint16_t count,
                                 const path_gridmap_t *hard_map)
 {
@@ -1536,8 +1379,7 @@ static bool validate_trajectory(const path_point_t *pts, uint16_t count,
         {
             return false;
         }
-        /* 曲率验收:硬上限内放行(墙C缺口几何上无法达到 1/Rmin,
-         * 见 path_config.h 注释);超软目标点数在仿真中统计报告 */
+        /* 曲率验收 */
         if (k_abs > PATH_KAPPA_HARD_MAX)
         {
             return false;
@@ -1574,7 +1416,7 @@ static bool validate_trajectory(const path_point_t *pts, uint16_t count,
     return true;
 }
 
-/* 数值健康检查:NaN/Inf/量级异常一律判非法(v == v 可移植地判 NaN) */
+/* 数值健康检查 */
 static bool num_ok(float v)
 {
     return (v == v) && (fabsf(v) < 1e6f);
@@ -1594,9 +1436,7 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
              imu->online && imu->yaw_valid && imu->gyro_valid &&
              (imu->state == IMU_STATE_READY);
 
-    /* DT35 前/左激光(串口帧解析值,单位 cm -> m)。
-     * 无回波=0(P1-3):按配置视为超程无障碍;若台架实测无回波上报
-     * 20cm(钳位),把 PATH_LASER_NO_ECHO_FREE 置 0 */
+    /* DT35 前/左激光 */
     *laser_f_m = (float)dt35_link[SENSOR_LINK_F_INDEX].distance_cm * 0.01f;
     if ((PATH_LASER_NO_ECHO_FREE != 0U) && (*laser_f_m <= 0.001f))
     {
@@ -1618,16 +1458,12 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
 
     if (imu_ok)
     {
-        /* 上一周期下发的指令速度作为位置前馈(断帧期间估计持续推进) */
+        /* 指令速度位置前馈 */
         PathFusion_Predict(imu->gyro_z_deg_s, dt_s,
                            vx_ch_ms, vy_ch_ms);
     }
 
-    /* 上位机位姿(0x11 位置帧,field_w 为 yaw_rad;小电脑侧已修复,
-     * 不再传四元数 W 分量)。
-     * 去重:pc_link 保存最近一帧,本函数 5ms 调一次,同一帧会被读多次,
-     * 若不去重,中值滤波窗口会被同一个跳变值填满而失去滤波意义,
-     * 因此只在"位置帧序号变化"即真正收到新帧时才融合一次。 */
+    /* 上位机位姿 */
     {
         uint32_t pos_seq = PcLink_GetPositionSeq();
         if (pos_seq != last_pc_frame_count)
@@ -1647,7 +1483,6 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
     return imu_ok;
 }
 
-/* ------------------------------------------------------------------ */
 static void runner_step(uint32_t now_ms, float dt_s)
 {
     imu_data_t imu;
@@ -1696,8 +1531,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
     }
-    /* 数据可用性降级(P1-1/P1-2):可用数据年龄 >800ms = 定位不可用停机;
-     * >300ms = 降速 0.3m/s(链路尚活但数据连续被拒,先慢行) */
+    /* 数据降级限速 */
     if (PathFusion_DataAge(now_ms) > PATH_UPPER_DATA_STOP_MS)
     {
         runner_stop(PATH_REASON_STOP_UPPER_LOST);
@@ -1771,7 +1605,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
         }
     }
 
-    /* ---- 纯追踪:目标点(先于激光兜底计算,激光停车时需要目标方向) ---- */
+    /* 纯追踪目标点 */
     PathPurePursuit_Find(trajectory, trajectory_count, fx, fy, v_ref,
                          trajectory[i_near].kappa,
                          i_near, &i_target, &tx, &ty);
@@ -1781,20 +1615,14 @@ static void runner_step(uint32_t now_ms, float dt_s)
         L = 1e-3f;
     }
 
-    /* ---- 前激光兜底(真实 DT35 量程 5-20cm + 期望墙门控) ----
-     * 饱和(>=20cm):量程内无障碍 -> 不约束;
-     * 期望墙在量程内(通道1/2 贴墙横移段,exp_f<=0.23)且读数与期望
-     * 相符(±5cm):位置正常 -> 不减速(消除饱和边界噪声抖动);
-     * 读数 <=12cm:目标横向且是期望墙 -> 0.25m/s 沿路径缓行回中
-     * (方向由纯追踪目标给出,非盲侧移);否则完全停车;
-     * 其余:按剩余距离限速。 */
+    /* 前激光兜底 */
     lf = laser_f;
     if (lf > PATH_LASER_MAX_RANGE_M)
     {
         lf = PATH_LASER_MAX_RANGE_M;
     }
 
-    /* 目标方向的车体纵向分量(车体 +x=前;世界系前向 = (-sin(yaw), cos(yaw))) */
+    /* 车体纵向分量 */
     {
         float fwd_x = -sinf(fyaw);
         float fwd_y = cosf(fyaw);
@@ -1839,12 +1667,9 @@ static void runner_step(uint32_t now_ms, float dt_s)
     vx_w = v_used * (tx - fx) / L;
     vy_w = v_used * (ty - fy) / L;
 
-    /* ---- 世界系 -> 底盘系(右/前),直接对应 Chassis_SetVelocity ---- */
     PathWorldToChassis(vx_w, vy_w, fyaw, &vx_c, &vy_c);
 
-    /* ---- 左激光横向微调(err = laser_left - expected_left) ----
-     * 仅当期望距离在传感器量程内才启用;真实 DT35 量程 20cm,本场地
-     * 期望距离 ~1.5m -> 默认禁用(避免 err 恒饱和导致持续侧移) */
+    /* 左激光横向微调 */
     if ((v_used > 0.0f) && laser_l_ok &&
         (exp_l <= PATH_LASER_MAX_RANGE_M))
     {
@@ -1869,11 +1694,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     /* ---- 航向锁 ---- */
     w_cmd = PathYawLock_Step(fyaw, v_used);
 
-    /* ---- slew-rate 限幅:平移用"矢量幅值"限幅 ----
-     * |Δv| <= max_accel * dt,方向可自由旋转。逐轴限幅在转弯时会
-     * 扭曲速度矢量方向(滞后角 ~ v^2*κ/a),急弯处高达 40 度以上,
-     * 机器人横着漂出弯道(仿真复现:缺口直角弯甩出 0.17m 撞西墙)。
-     * 矢量限幅只约束速度大小的变化率,转向由 yaw-lock 单独限幅。 */
+    /* ---- slew-rate 限幅 */
     dv_max = PATH_SLEW_XY_ACCEL_MS2 * dt_s;
     dw_max = PATH_SLEW_W_ACCEL_RADS2 * dt_s;
     {
@@ -1893,7 +1714,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     last_cmd_vy = vy_c;
     last_cmd_w = w_cmd;
 
-    /* ---- 数值防护:任何环节产生 NaN/Inf 立即安全停车 ---- */
+    /* ---- 数值防护 */
     if (!num_ok(vx_c) || !num_ok(vy_c) || !num_ok(w_cmd) ||
         !num_ok(v_ref) || !num_ok(v_used))
     {
@@ -1901,7 +1722,6 @@ static void runner_step(uint32_t now_ms, float dt_s)
         return;
     }
 
-    /* ---- 输出:底盘系(右/前) -> Chassis_SetVelocity(vx=右, vy=前, z=CCW) ---- */
     rpm_x = (int16_t)roundf(vx_c * PATH_RPM_PER_M_S);
     rpm_y = (int16_t)roundf(vy_c * PATH_RPM_PER_M_S);
     z = (int16_t)roundf(w_cmd * PATH_Z_PER_RAD_S);
@@ -1924,7 +1744,6 @@ static void runner_step(uint32_t now_ms, float dt_s)
     debug.run_ms = now_ms - run_start_ms;
 }
 
-/* ------------------------------------------------------------------ */
 void PathRunner_Init(void)
 {
     (void)memset(&debug, 0, sizeof(debug));
@@ -1958,7 +1777,7 @@ void PathRunner_Run(void)
     switch (state)
     {
     case PATH_STATE_INIT:
-        /* 关闭 IMU 模块自带航向保持,避免它覆盖本模块的 z 指令 */
+        /* 关闭 IMU 模块自带航向保持 */
         ImuMain_EnableYawHold(false);
         state = PATH_STATE_CALIB;
         state_start_ms = now_ms;
@@ -1981,8 +1800,7 @@ void PathRunner_Run(void)
                 reason = PATH_REASON_WAIT_START;
             }
         }
-        /* 等待 IMU_STATE_READY(真实 IMU 约 4.4s 才开始零偏采样,
-         * 不能用固定短超时);总超时 10s 防"IMU 未插/静默"永久卡死 */
+        /* 等待 IMU READY */
         if (imu.state == IMU_STATE_ERROR)
         {
             runner_stop(PATH_REASON_STOP_IMU_LOST);
@@ -2005,11 +1823,7 @@ void PathRunner_Run(void)
 
         Chassis_StopAll();
 
-        /* 起点 = 小电脑实测位姿(每次上电都是新点,不设与占位点的
-         * 距离门限)。必须收到首帧"数值合法、在场内、|yaw|<=30 度"
-         * 的位置帧才推进 BUILD;无位姿则无限等待(保持未布防,禁止盲跑)。
-         * 注意:起点检查必须在 runner_read_and_fuse 之前,否则新帧会被
-         * 融合去重逻辑先消费,导致本检查永远等不到"新帧"。 */
+        /* 起点=小电脑实测位姿 */
         {
             pc_position_t upper;
             uint32_t pos_seq = PcLink_GetPositionSeq();
@@ -2019,15 +1833,14 @@ void PathRunner_Run(void)
             {
                 last_pc_frame_count = pos_seq;
                 PathFusion_TouchLink(now_ms);
-                /* 起步朝向硬约束(P0-1):超出 ±30 度直接停机 */
+
                 if (fabsf(PathWrapAngle(upper.field_w)) >
                     (PATH_START_YAW_LIMIT_DEG * DEG2RAD))
                 {
                     runner_stop(PATH_REASON_STOP_HEADING);
                     break;
                 }
-                /* UpdateUpper 会做数值/场地范围校验:首帧不合法则
-                 * 继续等下一帧,并把合法帧整体写入 waypoints[0] */
+                /* UpdateUpper 会做数值/场地范围校验 */
                 if (!PathFusion_UpdateUpper(upper.field_x_m,
                                             upper.field_y_m,
                                             upper.field_w, now_ms))
@@ -2054,15 +1867,7 @@ void PathRunner_Run(void)
         PathGridMap_BuildInflated(&inflated_map);
         PathGridMap_BuildHardInflated(&hard_map);
 
-        /* 按实测起点动态生成前两个拐点(修复"仅覆盖 wp[0] 导致
-         * 偏离起点时首段扭曲 -> STOP_BUILD"),三分支:
-         *   1) start.y >= 1.12(已在墙1 北侧):垂直并入通道1;
-         *   2) start.x <= 0.8: L 形,垂直段在 x=start.x
-         *      (车右缘 +0.235 < 墙1 西端 1.05,不穿墙);
-         *   3) 其余(东南侧):先西行到 x=0.5(墙1 西端以西),再北上
-         *      y=1.65 并入通道 —— 与标称路线完全相同的 L 形,
-         *      斜线直接连拐角会被样条切进墙1 硬西北角(仿真复现
-         *      mid_pen + maxstep 0.23)。 */
+        /* 按起点动态生成拐点 */
         {
             float sx = waypoints[0].x_m;
             float sy = waypoints[0].y_m;
@@ -2097,8 +1902,7 @@ void PathRunner_Run(void)
             runner_stop(PATH_REASON_STOP_BUILD);
             break;
         }
-        /* 整形 + 验收循环(P0-2):最多尝试 PATH_BUILD_MAX_ATTEMPTS 次,
-         * 验收通过才允许进入 RUN,否则 STOP_BUILD */
+        /* 整形+验收循环 */
         {
             uint8_t attempt;
             bool built = false;
@@ -2140,10 +1944,7 @@ void PathRunner_Run(void)
     case PATH_STATE_ARRIVED:
     case PATH_STATE_STOPPED:
     default:
-        /* P2-4:进入终态时 runner_stop()/到达分支已调用一次
-         * Chassis_StopAll(SET_BRAKE 锁存,由 chassisTask 持续保持),
-         * 这里不再每周期覆盖,手动指令(Chassis_SetVelocity 解除锁存)
-         * 可以接管车辆。 */
+        /* P2-4 */
         break;
     }
 
@@ -2154,9 +1955,7 @@ void PathRunner_Run(void)
                         &debug.upper_frames);
     PcLink_GetStats(&debug.pc_frames, &debug.crc_errors);
 
-    /* 回传小电脑状态帧(55 AA 20 | state | error):
-     * state = 规划器状态机;error = 停止原因(STOPPED 时),正常为 0。
-     * 上位机竞争网关用该帧判断控制器在线(500ms 未收到判离线)。 */
+    /* 回传状态帧 */
     PcLink_SetStatus((uint8_t)state,
                      (state == PATH_STATE_STOPPED) ? (uint8_t)reason : 0U);
 
@@ -2171,9 +1970,7 @@ void PathRunner_Run(void)
 
 bool PathPlanner_OwnsChassis(void)
 {
-    /* 指令仲裁(P0-5):RUN 期间规划器独占底盘,computer_link 弱函数
-     * 被本强定义覆盖,手动速度帧被丢弃;STOPPED/ARRIVED 期间规划器
-     * 每周期 Chassis_StopAll,故障锁存优先于手动指令。 */
+    /* 指令仲裁(P0-5):RUN 期间规划器独占底盘 */
     return (state == PATH_STATE_RUN);
 }
 
@@ -2187,7 +1984,7 @@ void PathRunner_GetDebug(path_debug_t *out)
 
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count)
 {
-    /* 只要离线轨迹构建完成就返回(BUILD/RUN/ARRIVED/STOPPED 均可) */
+
     if (trajectory_count > 0U)
     {
         if (count != NULL)
@@ -2203,9 +2000,7 @@ const path_point_t *PathRunner_GetTrajectory(uint16_t *count)
     return NULL;
 }
 
-/* ------------------------------------------------------------------ */
 #if PATH_DEBUG && defined(PATH_DEBUG_UART_HANDLE)
-
 
 static void dbg_puts(UART_HandleTypeDef *uart, const char *s)
 {
@@ -2238,8 +2033,6 @@ static void dbg_putf(UART_HandleTypeDef *uart, float v)
     dbg_puts(uart, buf);
 }
 
-/* 每 400ms 一行:
- * t_ms,state,reason,x,y,yaw,vx,vy,w,v_ref,v_used,laserF,laserL,crc */
 void PathRunner_DebugDump(UART_HandleTypeDef *uart)
 {
     dbg_puts(uart, "t=");
@@ -2273,4 +2066,4 @@ void PathRunner_DebugDump(UART_HandleTypeDef *uart)
     dbg_puts(uart, "\r\n");
 }
 
-#endif /* PATH_DEBUG && PATH_DEBUG_UART_HANDLE */
+#endif /* PATH_DEBUG */
