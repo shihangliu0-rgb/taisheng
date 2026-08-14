@@ -80,7 +80,7 @@
 
 #define PATH_GOAL_X_M                 0.50f
 #define PATH_GOAL_Y_M                 3.70f
-#define PATH_ARRIVE_TOL_M             0.15f
+#define PATH_ARRIVE_TOL_M             0.08f   /* 融合判停阈值;物理停点=阈值+制动(~2cm)+滞后(~3cm) <= 0.15 规格 */
 /* 起点=小电脑实测位姿 */
 /* 起步朝向 ±30° */
 #define PATH_START_YAW_LIMIT_DEG      30.0f

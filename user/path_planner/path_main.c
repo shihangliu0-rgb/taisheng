@@ -1381,71 +1381,113 @@ static uint8_t build_route(void)
     {
         if (sx <= 0.45f)
         {
-            /* B0:缺口列内,直行北上即可 */
+            /* B0:缺口列内,直行北上,终点锚定目标 */
             raw_route[1].x_m = sx;
             raw_route[1].y_m = 3.70f;
-            return 2U;
+            raw_route[2].x_m = PATH_GOAL_X_M;
+            raw_route[2].y_m = PATH_GOAL_Y_M;
+            return 3U;
         }
         if (sy >= 2.75f)
         {
             /* 墙C 邻近带(2.75~3.45):车体无法安全绕行,非法起点 */
             return 0U;
         }
-        /* B1:通道2:西行到缺口列再北上 */
+        /* B1:通道2:西行到缺口列再北上,终点锚定目标 */
         raw_route[1].x_m = 0.375f;
         raw_route[1].y_m = sy;
         raw_route[2].x_m = 0.36f;
         raw_route[2].y_m = sy + 0.06f;
         raw_route[3].x_m = 0.36f;
         raw_route[3].y_m = 3.70f;
-        return 4U;
+        raw_route[4].x_m = PATH_GOAL_X_M;
+        raw_route[4].y_m = PATH_GOAL_Y_M;
+        return 5U;
     }
     if (sy >= 1.12f)
     {
+        if (sy > 2.125f)
+        {
+            /* C0:墙B 以北:直接西行绕缺口(同 B1) */
+            raw_route[1].x_m = 0.375f;
+            raw_route[1].y_m = sy;
+            raw_route[2].x_m = 0.36f;
+            raw_route[2].y_m = sy + 0.06f;
+            raw_route[3].x_m = 0.36f;
+            raw_route[3].y_m = 3.70f;
+            raw_route[4].x_m = PATH_GOAL_X_M;
+            raw_route[4].y_m = PATH_GOAL_Y_M;
+            return 5U;
+        }
         if (sx <= 2.0f)
         {
-            /* C1:墙B 西侧(含通道1 西段):并入 y=1.65 走标准 D 弧 */
+            /* C1:墙B 西侧:并入 y=1.65 走标准 D 弧 */
             if (fabsf(sy - 1.65f) < 0.15f)
             {
-                /* 已在通道线上:跳过北靠微腿,直接东行入弧 */
+                /* 已在通道线上:直接东行入弧 */
                 raw_route[1].x_m = 2.0f;
                 raw_route[1].y_m = 1.65f;
                 (void)memmove(&raw_route[2], &raw_route[4],
                               17U * sizeof(path_waypoint_t));
                 return 19U;
             }
-            raw_route[1].x_m = sx;
-            raw_route[1].y_m = 1.65f;
-            (void)memmove(&raw_route[2], &raw_route[3],
-                          18U * sizeof(path_waypoint_t));
-            return 20U;
+            if (sy < 1.53f)
+            {
+                /* 低位:北爬到通道1,倒角并入 */
+                raw_route[1].x_m = sx;
+                raw_route[1].y_m = 1.53f;
+                raw_route[2].x_m = sx + 0.12f;
+                if (raw_route[2].x_m > 2.0f) { raw_route[2].x_m = 2.0f; }
+                raw_route[2].y_m = 1.65f;
+                return 21U;
+            }
         }
-        /* C2:D 弧东侧:北转直连通道2(绕弧折返会 180 度急转) */
-        raw_route[1].x_m = sx;
-        raw_route[1].y_m = 2.60f;
-        raw_route[2].x_m = 1.0f;
-        raw_route[2].y_m = 2.60f;
-        raw_route[3].x_m = 0.375f;
-        raw_route[3].y_m = 2.60f;
-        raw_route[4].x_m = 0.36f;
-        raw_route[4].y_m = 2.66f;
-        raw_route[5].x_m = 0.36f;
-        raw_route[5].y_m = 3.70f;
-        return 6U;
+        /* C2:D 弧东侧或墙B 下沿:东移安全列(xcol >= 2.35,
+         * 避开墙B 东端硬膨胀 2.235),北上,倒角西行绕缺口 */
+        {
+            float xcol = (sx < 2.35f) ? 2.35f : sx;
+            raw_route[1].x_m = xcol;
+            raw_route[1].y_m = sy;
+            raw_route[2].x_m = xcol;
+            raw_route[2].y_m = 2.48f;
+            raw_route[3].x_m = xcol - 0.12f;
+            raw_route[3].y_m = 2.60f;
+            raw_route[4].x_m = 1.0f;
+            raw_route[4].y_m = 2.60f;
+            raw_route[5].x_m = 0.375f;
+            raw_route[5].y_m = 2.60f;
+            raw_route[6].x_m = 0.36f;
+            raw_route[6].y_m = 2.66f;
+            raw_route[7].x_m = 0.36f;
+            raw_route[7].y_m = 3.70f;
+            raw_route[8].x_m = PATH_GOAL_X_M;
+            raw_route[8].y_m = PATH_GOAL_Y_M;
+            return 9U;
+        }
     }
     if (sx <= 0.8f)
     {
-        /* 西南:L 形并入通道1 */
+        /* 西南:倒角 L 形并入通道1 */
         raw_route[1].x_m = sx;
-        raw_route[1].y_m = 1.65f;
+        raw_route[1].y_m = 1.53f;
+        raw_route[2].x_m = sx + 0.12f;
+        raw_route[2].y_m = 1.65f;
         return 21U;
     }
-    /* 东南:先西行 x=0.5 再北上(与标称同形) */
+    /* 东南:先西行 x=0.5,倒角后北上(与标称同形) */
     raw_route[1].x_m = 0.5f;
     raw_route[1].y_m = sy;
     raw_route[2].x_m = 0.5f;
-    raw_route[2].y_m = 1.65f;
-    return 21U;
+    raw_route[2].y_m = 1.53f;
+    raw_route[3].x_m = 0.62f;
+    raw_route[3].y_m = 1.65f;
+    /* 先复制模板 D 弧(源还在),再覆盖 raw[4];顺序反了会丢 D 弧
+     * 第一点,路由出现重复点 + 跳点(BUILD 必败,仿真复现) */
+    (void)memmove(&raw_route[5], &raw_route[4],
+                  17U * sizeof(path_waypoint_t));
+    raw_route[4].x_m = 2.0f;
+    raw_route[4].y_m = 1.65f;
+    return 22U;
 }
 
 /* 路由加密:直线段按 PATH_ROUTE_STEP_M 插入中间点。长腿+少点的
@@ -1470,9 +1512,10 @@ static uint8_t densify_route(const path_waypoint_t *src, uint8_t n,
         uint16_t steps = (uint16_t)(len / PATH_ROUTE_STEP_M);
         uint16_t k;
 
-        /* 每段至少插 2 个中间点:2 点路线加密后 >= 4 个控制点,
-         * 满足 3 阶 B 样条下限(终点旁起点不再 STOP_BUILD) */
-        if (steps < 2U) { steps = 2U; }
+        /* 仅对 <=3 点的短路线每段至少插 2 个中间点(死区起点补足
+         * 4 控制点);长路线短腿(D 弧密集点)保持自然步数,否则点数
+         * 超预算导致 densify 失败(仿真复现) */
+        if ((steps < 2U) && (n <= 3U)) { steps = 2U; }
 
         for (k = 1U; k <= steps; k++)
         {
