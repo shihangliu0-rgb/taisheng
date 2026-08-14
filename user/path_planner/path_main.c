@@ -1622,6 +1622,25 @@ static void runner_stop(path_reason_t why)
     Chassis_StopAll();
 }
 
+/* 3 点中值(激光滤波) */
+static float median3f(float a, float b, float c)
+{
+    float t;
+
+    if (a > b) { t = a; a = b; b = t; }
+    if (b > c) { t = b; b = c; c = t; }
+    if (a > b) { t = a; a = b; b = t; }
+    return b;
+}
+
+/* 激光中值历史(每收到一帧推入,控制周期只读中值) */
+static float laser_f_hist[3] = {0.20f, 0.20f, 0.20f};
+static float laser_l_hist[3] = {0.20f, 0.20f, 0.20f};
+static uint8_t laser_f_idx;
+static uint8_t laser_l_idx;
+static uint32_t laser_f_last_rx;
+static uint32_t laser_l_last_rx;
+
 /* 四轮电机是否全部在线(P0-3 恢复判定) */
 static bool motors_online(void)
 {
@@ -1757,20 +1776,62 @@ static bool runner_read_and_fuse(uint32_t now_ms, float dt_s,
              imu->online && imu->yaw_valid && imu->gyro_valid &&
              (imu->state == IMU_STATE_READY);
 
-    /* DT35 前/左激光 */
-    *laser_f_m = (float)dt35_link[SENSOR_LINK_F_INDEX].distance_cm * 0.01f;
-    if ((PATH_LASER_NO_ECHO_FREE != 0U) && (*laser_f_m <= 0.001f))
+    /* DT35 前/左激光:按"新帧"(last_rx_ms 变化)推入 3 点中值滤波。
+     * 偶然探测错误/震动毛刺/单帧超远距离被中值剔除——单帧 5cm 毛刺
+     * 不会误触发急停,单帧 20cm 毛刺不会在障碍前瞬间放开速度;
+     * 连续坏帧仍会触发停机,由瞬态恢复自动重布防兜底。
+     * (frame_pending 会被 DT35PnpLink_Send 清掉,不能用它判新帧) */
     {
-        *laser_f_m = PATH_LASER_MAX_RANGE_M;
+        uint32_t rx = dt35_link[SENSOR_LINK_F_INDEX].last_rx_ms;
+        float raw = (float)dt35_link[SENSOR_LINK_F_INDEX].distance_cm * 0.01f;
+
+        if ((PATH_LASER_NO_ECHO_FREE != 0U) && (raw <= 0.001f))
+        {
+            raw = PATH_LASER_MAX_RANGE_M;
+        }
+        if (laser_f_last_rx == 0U)
+        {
+            laser_f_hist[0] = raw;
+            laser_f_hist[1] = raw;
+            laser_f_hist[2] = raw;
+            laser_f_last_rx = rx;
+        }
+        else if (rx != laser_f_last_rx)
+        {
+            laser_f_hist[laser_f_idx] = raw;
+            laser_f_idx = (uint8_t)((laser_f_idx + 1U) % 3U);
+            laser_f_last_rx = rx;
+        }
+        *laser_f_m = median3f(laser_f_hist[0], laser_f_hist[1],
+                              laser_f_hist[2]);
     }
     *laser_f_ok = (dt35_link[SENSOR_LINK_F_INDEX].online != 0U) &&
                   ((uint32_t)(now_ms -
                    dt35_link[SENSOR_LINK_F_INDEX].last_rx_ms) <
                    PATH_LASER_TIMEOUT_MS);
-    *laser_l_m = (float)dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm * 0.01f;
-    if ((PATH_LASER_NO_ECHO_FREE != 0U) && (*laser_l_m <= 0.001f))
     {
-        *laser_l_m = PATH_LASER_MAX_RANGE_M;
+        uint32_t rx = dt35_link[SENSOR_LINK_L_B_INDEX].last_rx_ms;
+        float raw = (float)dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm * 0.01f;
+
+        if ((PATH_LASER_NO_ECHO_FREE != 0U) && (raw <= 0.001f))
+        {
+            raw = PATH_LASER_MAX_RANGE_M;
+        }
+        if (laser_l_last_rx == 0U)
+        {
+            laser_l_hist[0] = raw;
+            laser_l_hist[1] = raw;
+            laser_l_hist[2] = raw;
+            laser_l_last_rx = rx;
+        }
+        else if (rx != laser_l_last_rx)
+        {
+            laser_l_hist[laser_l_idx] = raw;
+            laser_l_idx = (uint8_t)((laser_l_idx + 1U) % 3U);
+            laser_l_last_rx = rx;
+        }
+        *laser_l_m = median3f(laser_l_hist[0], laser_l_hist[1],
+                              laser_l_hist[2]);
     }
     *laser_l_ok = (dt35_link[SENSOR_LINK_L_B_INDEX].online != 0U) &&
                   ((uint32_t)(now_ms -

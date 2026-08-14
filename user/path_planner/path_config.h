@@ -167,7 +167,8 @@
 #define PATH_EXPECTED_FRONT_RANGE_M   0.5f
 #define PATH_EXPECTED_SIDE_RANGE_M    0.5f
 #define PATH_LASER_LATERAL_DIR_MAX    0.60f   /* 目标方向车体纵向分量阈值 */
-/* 无回波=0 视为超程 */
+/* 无回波=0 视为超程(24V 供电,正常探测不会无回波;配合
+ * 3 点中值滤波,单帧 0 毛刺同样被剔除) */
 #define PATH_LASER_NO_ECHO_FREE       1U
 #define PATH_LASER_TIMEOUT_MS         500U    /* 与 dt35_pnp_link 的离线判据一致 */
 #define PATH_STOP_ON_LASER_LOSS       1U      /* 前激光离线 -> 停车 */
