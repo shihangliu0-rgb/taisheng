@@ -1079,8 +1079,12 @@ static bool PathFusion_UpdateUpper(float x_m, float y_m, float yaw_rad,
     float dx;
     float dy;
 
-    /* 数值合法性与场地范围校验:非法帧不参与融合 */
+    /* 数值/场地/单位校验:非法帧不参与融合。
+     * yaw 量级门(|yaw| <= 2pi + 0.1):挡住"把度当 rad"的单位混用
+     * (如 yaw=30 度被当 30rad,会在 20 度门限连续拒绝后被重捕获
+     * 强制接受,yaw-lock 直接发疯——单位错误是 90% 玄学的来源) */
     if ((x_m != x_m) || (y_m != y_m) || (yaw_rad != yaw_rad) ||
+        (fabsf(yaw_rad) > (2.0f * PATH_PI + 0.1f)) ||
         (x_m < PATH_POSE_X_MIN_M) || (x_m > PATH_POSE_X_MAX_M) ||
         (y_m < PATH_POSE_Y_MIN_M) || (y_m > PATH_POSE_Y_MAX_M))
     {
@@ -1352,6 +1356,8 @@ static uint32_t last_debug_ms;
 #endif
 static uint16_t last_i_near;
 static uint32_t last_pc_frame_count;   /* 上位机帧去重:每帧只融合一次 */
+static float build_start_x;            /* 本次 BUILD 使用的融合起点 */
+static float build_start_y;
 static uint16_t imu_fault_cycles;      /* 连续故障周期计数(去抖,P0-3) */
 static uint16_t motor_fault_cycles;
 static uint16_t laser_fault_cycles;
@@ -1710,6 +1716,17 @@ static bool validate_trajectory(const path_point_t *pts, uint16_t count,
         float gx = pts[count - 1U].x_m - PATH_GOAL_X_M;
         float gy = pts[count - 1U].y_m - PATH_GOAL_Y_M;
         if (sqrtf(gx * gx + gy * gy) > PATH_ARRIVE_TOL_M)
+        {
+            return false;
+        }
+    }
+
+    /* 起点校验:轨迹首点必须与本次 BUILD 使用的融合起点一致
+     * (0.05m 容差覆盖"贴软膨胀墙起点被推离"的几厘米位移) */
+    {
+        float sx = pts[0].x_m - build_start_x;
+        float sy = pts[0].y_m - build_start_y;
+        if (sqrtf(sx * sx + sy * sy) > 0.05f)
         {
             return false;
         }
@@ -2217,6 +2234,8 @@ void PathRunner_Run(void)
         (void)memcpy(raw_route, route_template,
                      21U * sizeof(path_waypoint_t));
         PathFusion_Get(&fx0, &fy0, NULL);
+        build_start_x = fx0;
+        build_start_y = fy0;
         if (PathGridMap_Contains(&hard_map, fx0, fy0))
         {
             /* 起点车体与墙重叠(如贴墙 2cm):非法,直接拒绝 */
