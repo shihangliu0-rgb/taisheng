@@ -157,17 +157,25 @@ wc = min((w for w in REAL if w[0] > 0.36), key=lambda w: w[0])
 d_gap_c = rect_dist(wc, 0.36, 3.10)   # y=3.10 落在墙C y 范围内
 print(f"  墙C缺口列 x=0.36 到墙C(xmin={wc[0]:.2f}): {d_gap_c * 100:.1f} cm"
       f"(车体余量 {(d_gap_c - ROBOT_W / 2) * 100:.1f} cm)")
-d_b = wall_dist(REAL, 1.0, 2.60)
-print(f"  通道2 (1.0,2.60) 到墙B: {d_b * 100:.1f} cm"
+# 按 y 范围定位内墙:墙B(y≈2.075-2.125)、墙A(y≈1.35-1.40)
+wb = min((w for w in REAL if 2.0 < w[1] < 2.2), key=lambda w: w[1])
+wa = min((w for w in REAL if 1.0 < w[1] < 2.0), key=lambda w: w[1])
+d_b = rect_dist(wb, 1.0, 2.60)
+print(f"  通道2 (1.0,2.60) 到墙B(ymin={wb[1]:.2f}): {d_b * 100:.1f} cm"
       f"(车体余量 {(d_b - ROBOT_L / 2) * 100:.1f} cm)")
-d_b1 = wall_dist(REAL, 2.0, 1.65)
-print(f"  通道1 (2.0,1.65) 到墙B: {d_b1 * 100:.1f} cm"
+d_b1 = rect_dist(wb, 2.0, 1.65)
+print(f"  通道1 (2.0,1.65) 到墙B(ymin={wb[1]:.2f}): {d_b1 * 100:.1f} cm"
       f"(车体余量 {(d_b1 - ROBOT_L / 2) * 100:.1f} cm)")
+# 墙A(通道墙1,最南侧内墙):通道1 中心线 y=1.65 对其南侧净距
+d_a = rect_dist(wa, 2.0, 1.65)
+print(f"  通道1 (2.0,1.65) 到墙1(墙A, ymax={wa[3]:.2f}): {d_a * 100:.1f} cm"
+      f"(车体余量 {(d_a - ROBOT_L / 2) * 100:.1f} cm"
+      + (" — 按 yaml 坐标通道1 走不通!需实测墙1 真实位置" if d_a < ROBOT_L / 2 else ")"))
 d_goal = math.hypot(WP[-1][0] - GOAL[0], WP[-1][1] - GOAL[1])
 print(f"  末路点 {WP[-1][0]:.2f},{WP[-1][1]:.2f} 到终点 {GOAL}: {d_goal * 100:.1f} cm"
       f"(到达容差 {TOL * 100:.0f} cm,{'OK' if d_goal <= TOL else '超容差!'})")
 print("=" * 72)
-print("注意: 墙B东端 x=2.0 与墙C东端延伸到东墙为反推值,需实车量测确认。")
+print("注意: 墙1(墙A)、墙B东端 x=2.0 与墙C东端延伸到东墙均为反推值,需实车量测确认。")
 
 # ---------------------------------------------------------------- 画图
 import matplotlib

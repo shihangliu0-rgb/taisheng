@@ -68,16 +68,18 @@
 #define PATH_POSE_Y_MIN_M             (-0.5f)
 #define PATH_POSE_Y_MAX_M             (PATH_FIELD_H_M + 0.5f)
 #define PATH_WALL_THICKNESS_M         0.049f
-#define PATH_WALL_COUNT               6U
+#define PATH_WALL_COUNT               7U
 
-/* 4 面外墙 + 2 面内部隔墙(wall_B / wall_C,wall_A 在 yaml 中已注释掉)。
- * 注意:这些是 field.yaml 反推值,与真实场地不一致(实车已在 x~3m 处
- * 撞墙)。必须以实测墙位更新本表后再上电运行。 */
+/* 4 面外墙 + 3 面内部隔墙(wall_A 最南侧 / wall_B 中间 / wall_C 最北)。
+ * 注意:wall_A 为 field.yaml 反推值,wall_B 东端 x=2.0 与 wall_C 东端
+ * 延伸到东墙亦为反推值;实测后如有出入直接改本表。 */
 #define PATH_WALLS_TABLE \
     {0.000f, 0.000f, 3.000f, 0.049f},   /* south 下墙(真实场地宽 3m) */ \
     {0.000f, 5.951f, 3.000f, 6.000f},   /* north 上墙 */ \
     {0.000f, 0.000f, 0.049f, 6.000f},   /* west  左墙 */ \
     {2.951f, 0.000f, 3.000f, 6.000f},   /* east  东墙(用户:x=3m 就是东墙) */ \
+    {1.300f, 1.350f, 3.000f, 1.400f},   /* wall_A 通道墙1(最南侧,分隔起点区与通道1; \
+                                            field.yaml 反推值,真实位置待实测) */ \
     {0.000f, 2.075f, 2.000f, 2.125f},   /* wall_B 东端 x=2.0(按 D 角圆弧反推) */ \
     {0.700f, 3.075f, 3.000f, 3.125f}    /* wall_C 延伸到东墙 */
 
