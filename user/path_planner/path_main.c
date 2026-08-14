@@ -1358,6 +1358,7 @@ static uint16_t last_i_near;
 static uint32_t last_pc_frame_count;   /* 上位机帧去重:每帧只融合一次 */
 static float build_start_x;            /* 本次 BUILD 使用的融合起点 */
 static float build_start_y;
+static bool heading_gate_done;          /* 朝向门只查冷启动一次 */
 static uint16_t imu_fault_cycles;      /* 连续故障周期计数(去抖,P0-3) */
 static uint16_t motor_fault_cycles;
 static uint16_t laser_fault_cycles;
@@ -2005,14 +2006,19 @@ static void runner_step(uint32_t now_ms, float dt_s)
     {
         if (expected_wall && target_lateral)
         {
+            /* 期望墙 + 横向目标:贴墙漂移,沿路径蠕行回中 */
             v_used = (v_ref < PATH_LASER_RECOVERY_V_MS) ?
                      v_ref : PATH_LASER_RECOVERY_V_MS;
             reason = PATH_REASON_LASER_SLOW;
         }
         else
         {
-            v_used = 0.0f;
-            reason = PATH_REASON_STOP_LASER_FRONT;
+            /* 真实障碍(非期望墙):真正停机——进 STOPPED、刹车锁存、
+             * error=6 上报、手动解除屏蔽;障碍清除后由瞬态恢复自动
+             * 重布防(此前只置 reason,state 仍 RUN:手动被屏蔽、
+             * 无刹车、yaw-lock 仍可能输出 z 原地转,审计大问题 A/B) */
+            runner_stop(PATH_REASON_STOP_LASER_FRONT);
+            return;
         }
     }
     else
@@ -2114,6 +2120,7 @@ void PathRunner_Init(void)
     last_cmd_vx = 0.0f;
     last_cmd_vy = 0.0f;
     last_cmd_w = 0.0f;
+    heading_gate_done = false;
     PathFusion_Init();
 }
 
@@ -2194,12 +2201,17 @@ void PathRunner_Run(void)
                 last_pc_frame_count = pos_seq;
                 PathFusion_TouchLink(now_ms);
 
-                if (fabsf(PathWrapAngle(upper.field_w)) >
-                    (PATH_START_YAW_LIMIT_DEG * DEG2RAD))
+                /* 朝向门只查冷启动第一次:恢复重布防时车体可能因
+                 * 撞墙反弹/打滑偏 >30 度,再查会把瞬态故障的恢复
+                 * 机会一次吃光变永久锁死(审计大问题 C) */
+                if (!heading_gate_done &&
+                    (fabsf(PathWrapAngle(upper.field_w)) >
+                     (PATH_START_YAW_LIMIT_DEG * DEG2RAD)))
                 {
                     runner_stop(PATH_REASON_STOP_HEADING);
                     break;
                 }
+                heading_gate_done = true;
                 /* UpdateUpper 会做数值/场地范围校验 */
                 if (!PathFusion_UpdateUpper(upper.field_x_m,
                                             upper.field_y_m,
@@ -2318,7 +2330,8 @@ void PathRunner_Run(void)
             bool transient = (reason == PATH_REASON_STOP_UPPER_LOST) ||
                              (reason == PATH_REASON_STOP_IMU_LOST) ||
                              (reason == PATH_REASON_STOP_LASER_LOST) ||
-                             (reason == PATH_REASON_STOP_MOTOR_LOST);
+                             (reason == PATH_REASON_STOP_MOTOR_LOST) ||
+                             (reason == PATH_REASON_STOP_LASER_FRONT);
 
             if (transient && (recover_count < PATH_RECOVER_MAX_TIMES))
             {
@@ -2335,6 +2348,13 @@ void PathRunner_Run(void)
                 healthy = imu_ok && lf_ok && motors_online() &&
                           !PathFusion_IsUpperLost(now_ms) &&
                           PathFusion_HasUpper();
+                /* 激光急停:障碍必须清除(距离 > 阈值 + 2cm)才恢复,
+                 * 否则每 1s 停-启-停循环反复刹车 */
+                if (reason == PATH_REASON_STOP_LASER_FRONT)
+                {
+                    healthy = healthy &&
+                              (lf > (PATH_LASER_STOP_DIST_M + 0.02f));
+                }
 
                 if (healthy)
                 {
