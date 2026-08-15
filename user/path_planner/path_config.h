@@ -171,11 +171,7 @@
 #define PATH_W_SLOPE                  1.2f
 #define PATH_W_MIN_RAD_S              0.3f
 
-#define PATH_LASER_STOP_DIST_M        0.12f   /* 非期望墙(障碍):前激光 <12cm 强制停车 */
-/* 期望墙(前方是轨迹已知的静态墙):贴墙通道里挂载点前移后期望距离
- * 仅 13.7cm,12cm 阈值会因转弯/噪声误急停;墙场景阈值放宽到 7cm
- * (挂载点距车头 2cm,车头离墙仍留 5cm),7~12cm 蠕行回中 */
-#define PATH_LASER_WALL_STOP_DIST_M   0.07f
+#define PATH_LASER_STOP_DIST_M        0.12f   /* 前激光 <12cm 强制停车 */
 #define PATH_LASER_MAX_RANGE_M        0.20f   /* 真实 DT35 量程 5-20cm(固件钳位) */
 /* 期望墙门控 */
 #define PATH_LASER_EXPECTED_MARGIN_M  0.04f
@@ -198,7 +194,7 @@
 #define PATH_LAT_SAFE_M               0.10f   /* 左激光 <10cm 强制向右修正 */
 
 /* 激光挂载(车体系: +x 前, +y 左) */
-#define PATH_LASER_FRONT_X_M          0.2885f   /* 底盘横梁安装:车头(0.3085)后移 2cm,实测 */
+#define PATH_LASER_FRONT_X_M          0.225f
 #define PATH_LASER_FRONT_Y_M          0.0f
 #define PATH_LASER_LEFT_X_M           0.0f
 #define PATH_LASER_LEFT_Y_M           0.175f
