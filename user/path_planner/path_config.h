@@ -90,9 +90,22 @@
 #define PATH_FAULT_IMU_MS             200U
 #define PATH_FAULT_MOTOR_MS           400U
 #define PATH_FAULT_LASER_MS           1500U   /* 下位板 I2C 重试 1000ms */
-/* 瞬态故障停机后,输入连续健康达此时长重新布防(限次数) */
-#define PATH_RECOVER_MS               1000U
+/* 瞬态故障恢复预算:滚动时间窗口内最多自动重布防次数。
+ * 超窗自动老化,不永久累计;到达终点或人工复位后清零。 */
 #define PATH_RECOVER_MAX_TIMES        3U
+#define PATH_RECOVER_WINDOW_MS        60000U  /* 恢复预算滚动窗口 */
+#define PATH_RECOVER_SETTLE_MS        500U    /* SAFE_STOP 静置去抖 */
+#define PATH_RECOVER_MS               1000U   /* RECOVER_CHECK 连续健康时长 */
+#define PATH_RECOVER_HEADING_TIMEOUT_MS 5000U /* 恢复期朝向超限最久等待,超时锁存 */
+/* 复位自检(FAULT_LATCH 人工复位后必经) */
+#define PATH_SELFCHECK_MS             500U    /* SELF_CHECK 连续健康时长 */
+#define PATH_SELFCHECK_TIMEOUT_MS     10000U  /* SELF_CHECK 总超时,超时锁存 */
+/* BUILD 瞬态失败自动恢复次数上限(超过进入 FAULT_LATCH) */
+#define PATH_BUILD_RECOVER_MAX        2U
+/* 自动循环检测:同因 + 同位 + 时间窗内重复故障,计数超限升级锁存 */
+#define PATH_LOOP_POSE_TOL_M          0.15f
+#define PATH_LOOP_TIME_MS             15000U
+#define PATH_LOOP_MAX                 3U
 
 #define PATH_SPLINE_DEGREE            3U
 #define PATH_SPLINE_SAMPLES           300U

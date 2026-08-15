@@ -48,13 +48,17 @@ typedef struct
 /* 运行状态机 */
 typedef enum
 {
-    PATH_STATE_INIT = 0,      /* 上电,关闭 IMU 自带航向保持 */
-    PATH_STATE_CALIB,         /* 静止采集陀螺零偏 */
-    PATH_STATE_WAIT_START,    /* 等待上位机位姿确定起点 */
-    PATH_STATE_BUILD,         /* 离线生成 B 样条 + 速度剖面 */
-    PATH_STATE_RUN,           /* 在线跟踪 */
-    PATH_STATE_ARRIVED,       /* 到达终点 */
-    PATH_STATE_STOPPED        /* 故障停止 */
+    PATH_STATE_INIT = 0,        /* 上电,关闭 IMU 自带航向保持 */
+    PATH_STATE_CALIB,           /* 静止采集陀螺零偏 */
+    PATH_STATE_WAIT_START,      /* 等待位姿 + 朝向确认(每次布防重新确认) */
+    PATH_STATE_BUILD,           /* 离线生成 B 样条 + 速度剖面 + 验收 */
+    PATH_STATE_RUN,             /* 在线跟踪 */
+    PATH_STATE_ARRIVED,         /* 到达终点(锁存) */
+    PATH_STATE_SAFE_STOP,       /* 瞬态故障安全停车(可自动恢复) */
+    PATH_STATE_RECOVER_CHECK,   /* 恢复前健康校验 + 朝向复查 */
+    PATH_STATE_FAULT_LATCH,     /* 确定性/永久故障,人工复位 */
+    PATH_STATE_MANUAL_OVERRIDE, /* 人工接管,自主挂起 */
+    PATH_STATE_SELF_CHECK       /* 复位后自检(通过才重新标定/布防) */
 } path_state_t;
 
 /* 运行原因(调试/日志) */
@@ -66,16 +70,33 @@ typedef enum
     PATH_REASON_RUN,
     PATH_REASON_LASER_SLOW,        /* 前激光兜底降速 */
     PATH_REASON_ARRIVED,
-    PATH_REASON_STOP_LASER_FRONT,  /* 前激光 < 12cm 强制停 */
-    PATH_REASON_STOP_UPPER_LOST,   /* 上位机位姿丢失 > 500ms */
-    PATH_REASON_STOP_IMU_LOST,     /* IMU 离线 */
-    PATH_REASON_STOP_LASER_LOST,   /* 前激光离线 */
-    PATH_REASON_STOP_BUILD,        /* 离线轨迹生成失败 */
-    PATH_REASON_STOP_NUMERIC,      /* 数值异常(NaN/Inf)防护停车 */
-    PATH_REASON_STOP_MOTOR_LOST,   /* 任一底盘电机离线 */
-    PATH_REASON_STOP_HEADING,      /* 起步朝向超出 ±30 度硬约束 */
-    PATH_REASON_STOP_TIMEOUT       /* 全程超时 */
+    PATH_REASON_STOP_LASER_FRONT,  /* 6  前激光障碍(瞬态) */
+    PATH_REASON_STOP_UPPER_LOST,   /* 7  位姿丢失(瞬态) */
+    PATH_REASON_STOP_IMU_LOST,     /* 8  IMU 故障(瞬态,窗口内可恢复) */
+    PATH_REASON_STOP_LASER_LOST,   /* 9  前激光离线(瞬态) */
+    PATH_REASON_STOP_BUILD,        /* 10 建轨迹失败-瞬态数据错误(可重 BUIL D) */
+    PATH_REASON_STOP_NUMERIC,      /* 11 数值异常(NaN/Inf),永久 */
+    PATH_REASON_STOP_MOTOR_LOST,   /* 12 电机离线(瞬态) */
+    PATH_REASON_STOP_HEADING,      /* 13 朝向超限(恢复期复查) */
+    PATH_REASON_STOP_TIMEOUT,      /* 14 单次 RUN 超时(瞬态) */
+    PATH_REASON_STOP_BUILD_PARAM,  /* 15 建轨迹失败-参数错误,永久(人工复位) */
+    PATH_REASON_STOP_ESTOP,        /* 16 遥控急停,永久(人工复位) */
+    PATH_REASON_STOP_RECOVER_FAIL, /* 17 恢复预算耗尽,永久(人工复位) */
+    PATH_REASON_STOP_MANUAL_LINK,  /* 18 人工链路丢失(瞬态,等待人工) */
+    PATH_REASON_MANUAL_OVERRIDE,   /* 19 人工接管(状态码) */
+    PATH_REASON_STOP_RECOVER_LOOP, /* 20 同因同位自动循环,升级锁存 */
+    PATH_REASON_STOP_SELFCHECK,    /* 21 复位自检失败/超时 */
+    PATH_REASON_SELFCHECK          /* 22 复位自检中(状态码) */
 } path_reason_t;
+
+/* 故障上下文:state 轴与 fault_code 轴正交,避免状态爆炸 */
+typedef struct
+{
+    path_reason_t code;       /* fault_code:最近一次故障原因 */
+    float x_m;                /* fault_pose:故障时融合位姿 */
+    float y_m;
+    uint32_t timestamp_ms;    /* fault_timestamp */
+} path_fault_ctx_t;
 
 /* 调试信息(每 400ms 采样一次) */
 typedef struct
@@ -101,6 +122,10 @@ typedef struct
     uint32_t pc_frames;
     uint32_t crc_errors;
     uint32_t run_ms;
+    path_reason_t fault_code;      /* 最近一次故障码 */
+    float fault_x_m;               /* 最近一次故障位姿 */
+    float fault_y_m;
+    uint32_t fault_timestamp_ms;   /* 最近一次故障时间 */
 } path_debug_t;
 
 void PathRunner_Init(void);
@@ -108,7 +133,21 @@ void PathRunner_Run(void);
 void PathRunner_GetDebug(path_debug_t *debug);
 const path_point_t *PathRunner_GetTrajectory(uint16_t *count);
 
-/* 指令仲裁:规划器 RUN 期间返回 true */
+/* 控制仲裁优先级:急停 > 人工 > 自主 */
+typedef enum
+{
+    PATH_ARB_ESTOP = 0,
+    PATH_ARB_MANUAL = 1,
+    PATH_ARB_AUTONOMOUS = 2
+} path_arb_t;
+
+/* commTask 每 1ms 调用:执行急停/人工/自主底盘指令仲裁(唯一写底盘入口) */
+void PathRunner_Arbitrate(void);
+
+/* 当前控制源(急停/人工/自主) */
+path_arb_t PathPlanner_Arbiter(void);
+
+/* 兼容旧接口:仅"自主且处于 RUN"时视为规划器独占底盘 */
 bool PathPlanner_OwnsChassis(void);
 
 void PathGridMap_BuildReal(path_gridmap_t *map);

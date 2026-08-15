@@ -1,23 +1,36 @@
 #include "computer_link.h"
 
 #include "action_api.h"
-#include "chassis_main.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
 
-#include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <string.h>
 
-/* 上位机到控制器的数据帧格式。 */
+/*
+ * 上位机到控制器的数据帧格式:
+ *   速度帧  A5 5A | vx(le16) | vy(le16) | z(le16) | checksum    (9B)
+ *   动作帧  A5 5B | action                                       (3B)
+ *   急停帧  A5 5D | sub(0x01 锁存 / 0x00 清除复位)                (3B)
+ *   模式帧  A5 5E | mode(0x01 手动 / 0x00 恢复自主)               (3B)
+ * 本模块只负责解析与提交,不直接写底盘;底盘指令由 PathRunner_Arbitrate
+ * 按"急停 > 人工 > 自主"优先级统一仲裁。
+ */
 #define COMPUTER_FRAME_HEADER_0   0xA5U
 #define COMPUTER_VELOCITY_HEADER  0x5AU
 #define COMPUTER_ACTION_HEADER    0x5BU
+#define COMPUTER_ESTOP_HEADER     0x5DU
+#define COMPUTER_MODE_HEADER      0x5EU
 #define COMPUTER_VELOCITY_LENGTH  9U
 #define COMPUTER_ACTION_LENGTH    3U
+#define COMPUTER_ESTOP_LENGTH     3U
 #define COMPUTER_MAX_FRAME_LENGTH 9U
 #define COMPUTER_LINK_TIMEOUT_MS  500U
+
+#define COMPUTER_ESTOP_ENGAGE     0x01U
+#define COMPUTER_ESTOP_CLEAR      0x00U
+#define COMPUTER_MODE_MANUAL      0x01U
+#define COMPUTER_MODE_AUTO        0x00U
 
 typedef enum
 {
@@ -26,19 +39,13 @@ typedef enum
     COMPUTER_RX_FRAME
 } computer_rx_state_t;
 
-typedef struct
-{
-    int16_t vx;
-    int16_t vy;
-    int16_t z;
-} computer_cmd_t;
-
 static UART_HandleTypeDef *computer_uart;
 static uint8_t rx_byte;
 static uint8_t rx_frame[COMPUTER_MAX_FRAME_LENGTH];
 static uint8_t rx_index;
 static uint8_t rx_length;
 static computer_rx_state_t rx_state;
+
 static volatile computer_cmd_t pending_cmd;
 static volatile uint8_t pending_action;
 static volatile uint32_t last_rx_ms;
@@ -47,15 +54,17 @@ static volatile bool action_frame_pending;
 static volatile bool link_online;
 static volatile bool restart_requested;
 
-/*
- * 指令仲裁(P0-5):路径规划器 RUN 期间独占底盘,返回 true 时本模块
- * 丢弃手动速度/动作指令且不触发手动超时停机。path_main.c 提供强定义;
- * 未接入规划器的工程(或规划器未运行)保持 false,行为与原来一致。
- */
-__weak bool PathPlanner_OwnsChassis(void)
-{
-    return false;
-}
+/* 安全/模式信号:ISR 置位,任务侧消费 */
+static volatile bool estop_latched;
+static volatile bool estop_clear_edge;
+static volatile bool mode_manual_edge;
+static volatile bool mode_auto_edge;
+
+/* 每周期提交给仲裁器的手动指令(commTask 单消费者) */
+static computer_cmd_t manual_cmd;
+static uint8_t manual_action;
+static bool manual_cmd_valid;
+static bool manual_action_valid;
 
 static void reset_parser(void)
 {
@@ -85,14 +94,19 @@ static int16_t read_le_i16(const uint8_t *data)
     return (int16_t)value;
 }
 
+static void touch_link(void)
+{
+    last_rx_ms = HAL_GetTick();
+    link_online = true;
+}
+
 static void store_command(void)
 {
     pending_cmd.vx = read_le_i16(&rx_frame[2]);
     pending_cmd.vy = read_le_i16(&rx_frame[4]);
     pending_cmd.z = read_le_i16(&rx_frame[6]);
-    last_rx_ms = HAL_GetTick();
+    touch_link();
     cmd_pending = true;
-    link_online = true;
 }
 
 static void store_action(void)
@@ -103,7 +117,35 @@ static void store_action(void)
     }
 
     pending_action = rx_frame[2];
+    touch_link();
     action_frame_pending = true;
+}
+
+static void store_estop(uint8_t sub)
+{
+    touch_link();
+    if (sub == COMPUTER_ESTOP_ENGAGE)
+    {
+        estop_latched = true;
+    }
+    else if (sub == COMPUTER_ESTOP_CLEAR)
+    {
+        estop_latched = false;
+        estop_clear_edge = true;
+    }
+}
+
+static void store_mode(uint8_t mode)
+{
+    touch_link();
+    if (mode == COMPUTER_MODE_MANUAL)
+    {
+        mode_manual_edge = true;
+    }
+    else if (mode == COMPUTER_MODE_AUTO)
+    {
+        mode_auto_edge = true;
+    }
 }
 
 static void parse_byte(uint8_t data)
@@ -120,17 +162,20 @@ static void parse_byte(uint8_t data)
 
     case COMPUTER_RX_HEADER_1:
         if ((data == COMPUTER_VELOCITY_HEADER) ||
-            (data == COMPUTER_ACTION_HEADER))
+            (data == COMPUTER_ACTION_HEADER) ||
+            (data == COMPUTER_ESTOP_HEADER) ||
+            (data == COMPUTER_MODE_HEADER))
         {
             rx_frame[1] = data;
             rx_index = 2U;
             rx_length = (data == COMPUTER_VELOCITY_HEADER)
                             ? COMPUTER_VELOCITY_LENGTH
-                            : COMPUTER_ACTION_LENGTH;    //速度帧9字节，动作帧3字节
+                            : COMPUTER_ACTION_LENGTH;   /* 0x5B/0x5D/0x5E 均为 3B */
             rx_state = COMPUTER_RX_FRAME;
         }
-        else if (data != COMPUTER_FRAME_HEADER_0)   // 不是 0xA5 也不是有效帧头，重置
+        else if (data != COMPUTER_FRAME_HEADER_0)
         {
+            /* 不是 0xA5 也不是有效帧头,重置 */
             reset_parser();
         }
         break;
@@ -148,6 +193,14 @@ static void parse_byte(uint8_t data)
             else if (rx_frame[1] == COMPUTER_ACTION_HEADER)
             {
                 store_action();
+            }
+            else if (rx_frame[1] == COMPUTER_ESTOP_HEADER)
+            {
+                store_estop(rx_frame[2]);
+            }
+            else if (rx_frame[1] == COMPUTER_MODE_HEADER)
+            {
+                store_mode(rx_frame[2]);
             }
             reset_parser();
         }
@@ -200,6 +253,16 @@ HAL_StatusTypeDef ComputerLink_Init(UART_HandleTypeDef *uart)
     action_frame_pending = false;
     link_online = false;
     restart_requested = false;
+    estop_latched = false;
+    estop_clear_edge = false;
+    mode_manual_edge = false;
+    mode_auto_edge = false;
+    manual_cmd.vx = 0;
+    manual_cmd.vy = 0;
+    manual_cmd.z = 0;
+    manual_action = ACTION_CMD_NONE;
+    manual_cmd_valid = false;
+    manual_action_valid = false;
     reset_parser();
 
     status = start_receive();
@@ -213,12 +276,8 @@ HAL_StatusTypeDef ComputerLink_Init(UART_HandleTypeDef *uart)
 
 void ComputerLink_Run(void)
 {
-    computer_cmd_t cmd;
-    uint8_t action = ACTION_CMD_NONE;
     uint32_t now_ms;
     uint32_t primask;
-    bool has_command = false;
-    bool has_action = false;
 
     if (computer_uart == NULL)
     {
@@ -231,45 +290,37 @@ void ComputerLink_Run(void)
         restart_receive();
     }
 
+    /* 从 ISR 缓存取出本周期手动速度/动作(不写底盘) */
     primask = __get_PRIMASK();
     __disable_irq();
     if (cmd_pending)
     {
-        cmd.vx = pending_cmd.vx;
-        cmd.vy = pending_cmd.vy;
-        cmd.z = pending_cmd.z;
+        manual_cmd.vx = pending_cmd.vx;
+        manual_cmd.vy = pending_cmd.vy;
+        manual_cmd.z = pending_cmd.z;
         cmd_pending = false;
-        has_command = true;
+        manual_cmd_valid = true;
     }
     if (action_frame_pending)
     {
-        action = pending_action;
+        manual_action = pending_action;
         action_frame_pending = false;
-        has_action = true;
+        manual_action_valid = true;
     }
     if (primask == 0U)
     {
         __enable_irq();
     }
 
-    if (has_command && !PathPlanner_OwnsChassis())
-    {
-        (void)Chassis_SetVelocity(cmd.vx, cmd.vy, cmd.z);
-    }
-    if (has_action && !PathPlanner_OwnsChassis())
-    {
-        (void)Action_Request((action_cmd_t)action);
-    }
-
+    /* 遥测回传 */
     (void)ImuMain_SendYaw(computer_uart);
     DT35PnpLink_Send(computer_uart);
 
+    /* 链路存活更新:停机决策由仲裁器负责 */
     now_ms = HAL_GetTick();
-    if (link_online && ((now_ms - last_rx_ms) > COMPUTER_LINK_TIMEOUT_MS) &&
-        !PathPlanner_OwnsChassis())
+    if (link_online && ((now_ms - last_rx_ms) > COMPUTER_LINK_TIMEOUT_MS))
     {
         link_online = false;
-        Chassis_StopAll();
     }
 }
 
@@ -295,4 +346,61 @@ void ComputerLink_Error(UART_HandleTypeDef *uart)
     }
 
     restart_requested = true;
+}
+
+/* ---- 仲裁器查询接口 ---- */
+
+bool ComputerLink_EstopLatched(void)
+{
+    return estop_latched;
+}
+
+bool ComputerLink_LinkOnline(void)
+{
+    return link_online;
+}
+
+bool ComputerLink_ResetRequested(void)
+{
+    bool r = estop_clear_edge;
+    estop_clear_edge = false;
+    return r;
+}
+
+bool ComputerLink_AutoResumeRequested(void)
+{
+    bool r = mode_auto_edge;
+    mode_auto_edge = false;
+    return r;
+}
+
+bool ComputerLink_ManualRequested(void)
+{
+    /* 仅显式模式命令(A5 5E 01)触发自动->手动切换;
+     * 普通速度/动作帧只在已处于手动模式时被执行,不触发模式切换 */
+    bool r = mode_manual_edge;
+    mode_manual_edge = false;
+    return r;
+}
+
+bool ComputerLink_GetCommand(computer_cmd_t *cmd)
+{
+    if ((cmd != NULL) && manual_cmd_valid)
+    {
+        *cmd = manual_cmd;
+        manual_cmd_valid = false;
+        return true;
+    }
+    return false;
+}
+
+bool ComputerLink_GetAction(uint8_t *action)
+{
+    if ((action != NULL) && manual_action_valid)
+    {
+        *action = manual_action;
+        manual_action_valid = false;
+        return true;
+    }
+    return false;
 }

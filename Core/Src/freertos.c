@@ -296,7 +296,9 @@ __weak void StartCommTask(void *argument)
     ComputerLink_Run();
     /* parse new PC frames first, then let the planner consume them */
     PcLink_Run();
-    /* path planner runs last: overrides manual velocity cmd every control period */
+    /* chassis arbitration: estop > manual > autonomous (single chassis writer) */
+    PathRunner_Arbitrate();
+    /* autonomous state machine (5ms decimation) */
     PathRunner_Run();
     osDelay(1);
   }

@@ -2,7 +2,9 @@
 #include "path_main.h"
 
 /* 仓库已有模块(全部真实外设数据) */
+#include "action_api.h"
 #include "chassis_main.h"
+#include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
 #include "pc_link.h"
@@ -1031,6 +1033,14 @@ static void PathFusion_Init(void)
     (void)memset(&fusion, 0, sizeof(fusion));
 }
 
+/* 重新标定:清零陀螺零偏采样(复位自检通过后重新走 CALIB) */
+static void PathFusion_ResetCalib(void)
+{
+    fusion.calib_count = 0U;
+    fusion.calib_sum = 0.0f;
+    fusion.zero_offset_deg_s = 0.0f;
+}
+
 static bool PathFusion_CalibrateSample(float gyro_z_deg_s)
 {
     if (fusion.calib_count < PATH_FUSION_CALIB_SAMPLES)
@@ -1344,6 +1354,8 @@ static const path_waypoint_t route_template[PATH_WAYPOINT_COUNT] =
 static path_waypoint_t raw_route[24];      /* 区域路由(未加密) */
 static path_waypoint_t waypoints[PATH_WAYPOINT_COUNT];
 
+#define RECOVER_RING_SIZE ((PATH_RECOVER_MAX_TIMES > 0U) ? PATH_RECOVER_MAX_TIMES : 1U)
+
 static path_state_t state = PATH_STATE_INIT;
 static path_reason_t reason = PATH_REASON_BOOT;
 static path_debug_t debug;
@@ -1358,12 +1370,18 @@ static uint16_t last_i_near;
 static uint32_t last_pc_frame_count;   /* 上位机帧去重:每帧只融合一次 */
 static float build_start_x;            /* 本次 BUILD 使用的融合起点 */
 static float build_start_y;
-static bool heading_gate_done;          /* 朝向门只查冷启动一次 */
-static uint16_t imu_fault_cycles;      /* 连续故障周期计数(去抖,P0-3) */
+static bool heading_confirmed;         /* 本次布防是否已通过朝向确认 */
+static uint16_t imu_fault_cycles;      /* 连续故障周期计数(去抖) */
 static uint16_t motor_fault_cycles;
 static uint16_t laser_fault_cycles;
-static uint32_t recover_healthy_since; /* 0=未开始计时 */
-static uint8_t  recover_count;
+static uint32_t recover_healthy_since; /* RECOVER_CHECK 连续健康计时起点,0=未开始 */
+static uint32_t recover_heading_since; /* 恢复期朝向超限计时起点 */
+static uint32_t selfcheck_healthy_since; /* SELF_CHECK 连续健康计时起点,0=未开始 */
+static uint32_t recover_ring[RECOVER_RING_SIZE]; /* 成功恢复时间戳(滚动窗口) */
+static uint8_t  build_fail_count;     /* BUILD 瞬态失败连续计数(超过上限锁存) */
+static uint8_t  loop_count;           /* 同因同位故障循环计数 */
+static path_fault_ctx_t fault_ctx;    /* 最近一次故障上下文(code/pose/time) */
+static bool fault_ctx_valid;
 static float last_cmd_vx;
 static float last_cmd_vy;
 static float last_cmd_w;
@@ -1612,14 +1630,174 @@ static void resample_uniform(path_point_t *pts, uint16_t *count)
     *count = n_new;
 }
 
-static void runner_stop(path_reason_t why)
+/* 故障分类:可自动恢复(瞬态) vs 需人工复位(确定性/永久) */
+static bool reason_auto_recoverable(path_reason_t why)
 {
-    state = PATH_STATE_STOPPED;
+    switch (why)
+    {
+    case PATH_REASON_STOP_UPPER_LOST:
+    case PATH_REASON_STOP_IMU_LOST:
+    case PATH_REASON_STOP_LASER_LOST:
+    case PATH_REASON_STOP_MOTOR_LOST:
+    case PATH_REASON_STOP_LASER_FRONT:
+    case PATH_REASON_STOP_BUILD:
+    case PATH_REASON_STOP_HEADING:
+    case PATH_REASON_STOP_TIMEOUT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* 记录故障上下文:state 轴与 fault_code 轴正交,避免状态爆炸 */
+static void record_fault_context(path_reason_t why)
+{
+    float fx = 0.0f;
+    float fy = 0.0f;
+
+    PathFusion_Get(&fx, &fy, NULL);
+    fault_ctx_valid = true;
+    fault_ctx.code = why;
+    fault_ctx.x_m = fx;
+    fault_ctx.y_m = fy;
+    fault_ctx.timestamp_ms = HAL_GetTick();
+}
+
+static void reset_fault_context(void)
+{
+    fault_ctx_valid = false;
+    fault_ctx.code = PATH_REASON_BOOT;
+    fault_ctx.x_m = 0.0f;
+    fault_ctx.y_m = 0.0f;
+    fault_ctx.timestamp_ms = 0U;
+    loop_count = 0U;
+}
+
+/* 自动循环检测:同因 + 同位 + 时间窗内重复故障 -> 升级锁存 */
+static bool fault_is_repeat_loop(path_reason_t why)
+{
+    float fx = 0.0f;
+    float fy = 0.0f;
+    uint32_t now_ms = HAL_GetTick();
+    float d;
+
+    if (!fault_ctx_valid || (fault_ctx.code != why) ||
+        ((uint32_t)(now_ms - fault_ctx.timestamp_ms) >= PATH_LOOP_TIME_MS))
+    {
+        return false;
+    }
+
+    PathFusion_Get(&fx, &fy, NULL);
+    d = sqrtf((fx - fault_ctx.x_m) * (fx - fault_ctx.x_m) +
+              (fy - fault_ctx.y_m) * (fy - fault_ctx.y_m));
+    return (d < PATH_LOOP_POSE_TOL_M);
+}
+
+/* 瞬态故障 -> SAFE_STOP:刹车锁存,可在恢复预算内自动恢复;
+ * 同因同位循环超限则直接升级 FAULT_LATCH */
+static void runner_safe_stop(path_reason_t why)
+{
+    if (fault_is_repeat_loop(why))
+    {
+        loop_count++;
+    }
+    else
+    {
+        loop_count = 1U;
+    }
+    record_fault_context(why);
+
+    if (loop_count >= PATH_LOOP_MAX)
+    {
+        runner_fault_latch(PATH_REASON_STOP_RECOVER_LOOP);
+        return;
+    }
+
+    state = PATH_STATE_SAFE_STOP;
     reason = why;
+    state_start_ms = HAL_GetTick();
+    recover_healthy_since = 0U;
+    recover_heading_since = 0U;
     last_cmd_vx = 0.0f;
     last_cmd_vy = 0.0f;
     last_cmd_w = 0.0f;
     Chassis_StopAll();
+}
+
+/* 确定性/永久故障 -> FAULT_LATCH:刹车锁存,仅人工复位 */
+static void runner_fault_latch(path_reason_t why)
+{
+    record_fault_context(why);
+    state = PATH_STATE_FAULT_LATCH;
+    reason = why;
+    state_start_ms = HAL_GetTick();
+    last_cmd_vx = 0.0f;
+    last_cmd_vy = 0.0f;
+    last_cmd_w = 0.0f;
+    Chassis_StopAll();
+}
+
+/* BUILD 瞬态失败:有限次自动恢复,超限升级锁存(防止 BUILD 无限重试) */
+static void build_fail(void)
+{
+    if (build_fail_count < PATH_BUILD_RECOVER_MAX)
+    {
+        build_fail_count++;
+        runner_safe_stop(PATH_REASON_STOP_BUILD);
+    }
+    else
+    {
+        runner_fault_latch(PATH_REASON_STOP_BUILD_PARAM);
+    }
+}
+
+/* 恢复预算:滚动窗口内成功恢复次数(超窗自动老化,不永久累计) */
+static uint8_t recover_count_in_window(uint32_t now_ms)
+{
+    uint8_t i;
+    uint8_t n = 0U;
+
+    for (i = 0U; i < RECOVER_RING_SIZE; i++)
+    {
+        if ((recover_ring[i] != 0U) &&
+            ((uint32_t)(now_ms - recover_ring[i]) < PATH_RECOVER_WINDOW_MS))
+        {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* 记录一次成功恢复(空位写入,否则覆盖最旧) */
+static void recover_record(uint32_t now_ms)
+{
+    uint8_t i;
+    uint8_t oldest = 0U;
+
+    for (i = 0U; i < RECOVER_RING_SIZE; i++)
+    {
+        if (recover_ring[i] == 0U)
+        {
+            recover_ring[i] = now_ms;
+            return;
+        }
+        if (recover_ring[i] < recover_ring[oldest])
+        {
+            oldest = i;
+        }
+    }
+    recover_ring[oldest] = now_ms;
+}
+
+/* 清空恢复预算(到达终点或人工复位后) */
+static void recover_reset_budget(void)
+{
+    uint8_t i;
+
+    for (i = 0U; i < RECOVER_RING_SIZE; i++)
+    {
+        recover_ring[i] = 0U;
+    }
 }
 
 /* 3 点中值(激光滤波) */
@@ -1960,12 +2138,12 @@ static void runner_step(uint32_t now_ms, float dt_s)
     /* ---- 安全检查(顺序即优先级,P0-3 去抖) ---- */
     if (!PathFusion_HasUpper() || PathFusion_IsUpperLost(now_ms))
     {
-        runner_stop(PATH_REASON_STOP_UPPER_LOST);
+        runner_safe_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
     }
     if (PathFusion_DataAge(now_ms) > PATH_UPPER_DATA_STOP_MS)
     {
-        runner_stop(PATH_REASON_STOP_UPPER_LOST);
+        runner_safe_stop(PATH_REASON_STOP_UPPER_LOST);
         return;
     }
 
@@ -1981,7 +2159,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     if ((uint32_t)imu_fault_cycles * PATH_CONTROL_PERIOD_MS >=
         PATH_FAULT_IMU_MS)
     {
-        runner_stop(PATH_REASON_STOP_IMU_LOST);
+        runner_safe_stop(PATH_REASON_STOP_IMU_LOST);
         return;
     }
 
@@ -1997,7 +2175,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     if ((uint32_t)laser_fault_cycles * PATH_CONTROL_PERIOD_MS >=
         PATH_FAULT_LASER_MS)
     {
-        runner_stop(PATH_REASON_STOP_LASER_LOST);
+        runner_safe_stop(PATH_REASON_STOP_LASER_LOST);
         return;
     }
 
@@ -2013,13 +2191,13 @@ static void runner_step(uint32_t now_ms, float dt_s)
     if ((uint32_t)motor_fault_cycles * PATH_CONTROL_PERIOD_MS >=
         PATH_FAULT_MOTOR_MS)
     {
-        runner_stop(PATH_REASON_STOP_MOTOR_LOST);
+        runner_safe_stop(PATH_REASON_STOP_MOTOR_LOST);
         return;
     }
 
     if ((uint32_t)(now_ms - run_start_ms) > PATH_MAX_RUN_MS)
     {
-        runner_stop(PATH_REASON_STOP_TIMEOUT);
+        runner_safe_stop(PATH_REASON_STOP_TIMEOUT);
         return;
     }
 
@@ -2034,6 +2212,9 @@ static void runner_step(uint32_t now_ms, float dt_s)
             last_cmd_vx = 0.0f;
             last_cmd_vy = 0.0f;
             last_cmd_w = 0.0f;
+            recover_reset_budget();   /* 到达成功:恢复预算清零 */
+            build_fail_count = 0U;
+            reset_fault_context();  /* 到达成功:故障循环上下文清零 */
             Chassis_StopAll();
             return;
         }
@@ -2119,7 +2300,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
             /* 真实障碍(非期望墙)或期望墙已贴到 7cm:真正停机——
              * 进 STOPPED、刹车锁存、error=6 上报、手动解除屏蔽;
              * 障碍清除后由瞬态恢复自动重布防 */
-            runner_stop(PATH_REASON_STOP_LASER_FRONT);
+            runner_safe_stop(PATH_REASON_STOP_LASER_FRONT);
             return;
         }
     }
@@ -2186,7 +2367,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     if (!num_ok(vx_c) || !num_ok(vy_c) || !num_ok(w_cmd) ||
         !num_ok(v_ref) || !num_ok(v_used))
     {
-        runner_stop(PATH_REASON_STOP_NUMERIC);
+        runner_fault_latch(PATH_REASON_STOP_NUMERIC);
         return;
     }
 
@@ -2222,7 +2403,16 @@ void PathRunner_Init(void)
     last_cmd_vx = 0.0f;
     last_cmd_vy = 0.0f;
     last_cmd_w = 0.0f;
-    heading_gate_done = false;
+    heading_confirmed = false;
+    imu_fault_cycles = 0U;
+    motor_fault_cycles = 0U;
+    laser_fault_cycles = 0U;
+    recover_healthy_since = 0U;
+    recover_heading_since = 0U;
+    selfcheck_healthy_since = 0U;
+    build_fail_count = 0U;
+    reset_fault_context();
+    recover_reset_budget();
     PathFusion_Init();
 }
 
@@ -2248,6 +2438,7 @@ void PathRunner_Run(void)
     case PATH_STATE_INIT:
         /* 关闭 IMU 模块自带航向保持 */
         ImuMain_EnableYawHold(false);
+        heading_confirmed = false;
         state = PATH_STATE_CALIB;
         state_start_ms = now_ms;
         reason = PATH_REASON_CALIB;
@@ -2264,20 +2455,21 @@ void PathRunner_Run(void)
         {
             if (PathFusion_CalibrateSample(imu.gyro_z_deg_s))
             {
+                heading_confirmed = false;
                 state = PATH_STATE_WAIT_START;
                 state_start_ms = now_ms;
                 reason = PATH_REASON_WAIT_START;
             }
         }
-        /* 等待 IMU READY */
+        /* 等待 IMU READY;IMU 错误或超时 -> 瞬态 SAFE_STOP(可恢复) */
         if (imu.state == IMU_STATE_ERROR)
         {
-            runner_stop(PATH_REASON_STOP_IMU_LOST);
+            runner_safe_stop(PATH_REASON_STOP_IMU_LOST);
             break;
         }
         if ((uint32_t)(now_ms - state_start_ms) > PATH_CALIB_TIMEOUT_MS)
         {
-            runner_stop(PATH_REASON_STOP_IMU_LOST);
+            runner_safe_stop(PATH_REASON_STOP_IMU_LOST);
         }
         break;
     }
@@ -2292,7 +2484,7 @@ void PathRunner_Run(void)
 
         Chassis_StopAll();
 
-        /* 起点=小电脑实测位姿 */
+        /* 起点=小电脑实测位姿;每次布防(冷启动/恢复/人工复位)都重新确认 */
         {
             pc_position_t upper;
             uint32_t pos_seq = PcLink_GetPositionSeq();
@@ -2303,17 +2495,15 @@ void PathRunner_Run(void)
                 last_pc_frame_count = pos_seq;
                 PathFusion_TouchLink(now_ms);
 
-                /* 朝向门只查冷启动第一次:恢复重布防时车体可能因
-                 * 撞墙反弹/打滑偏 >30 度,再查会把瞬态故障的恢复
-                 * 机会一次吃光变永久锁死(审计大问题 C) */
-                if (!heading_gate_done &&
+                /* 朝向门:冷启动/故障恢复/人工移动后都必须重新确认 */
+                if (!heading_confirmed &&
                     (fabsf(PathWrapAngle(upper.field_w)) >
                      (PATH_START_YAW_LIMIT_DEG * DEG2RAD)))
                 {
-                    runner_stop(PATH_REASON_STOP_HEADING);
+                    runner_safe_stop(PATH_REASON_STOP_HEADING);
                     break;
                 }
-                heading_gate_done = true;
+                heading_confirmed = true;
                 /* UpdateUpper 会做数值/场地范围校验 */
                 if (!PathFusion_UpdateUpper(upper.field_x_m,
                                             upper.field_y_m,
@@ -2349,12 +2539,22 @@ void PathRunner_Run(void)
         (void)memcpy(raw_route, route_template,
                      21U * sizeof(path_waypoint_t));
         PathFusion_Get(&fx0, &fy0, NULL);
+
+        /* 输入数据健康:非法/NaN/越界位姿属瞬态数据错误,恢复后重 BUIL D */
+        if (!num_ok(fx0) || !num_ok(fy0) ||
+            (fx0 < PATH_POSE_X_MIN_M) || (fx0 > PATH_POSE_X_MAX_M) ||
+            (fy0 < PATH_POSE_Y_MIN_M) || (fy0 > PATH_POSE_Y_MAX_M))
+        {
+            build_fail();
+            break;
+        }
+
         build_start_x = fx0;
         build_start_y = fy0;
         if (PathGridMap_Contains(&hard_map, fx0, fy0))
         {
-            /* 起点车体与墙重叠(如贴墙 2cm):非法,直接拒绝 */
-            runner_stop(PATH_REASON_STOP_BUILD);
+            /* 起点与墙重叠:位姿瞬态错误,恢复后按新位姿重 BUIL D */
+            build_fail();
             break;
         }
         raw_route[0].x_m = fx0;
@@ -2362,14 +2562,16 @@ void PathRunner_Run(void)
         wp_count = build_route();
         if (wp_count < 2U)
         {
-            runner_stop(PATH_REASON_STOP_BUILD);
+            /* 起点区域无路由:与位姿相关,恢复后重试 */
+            build_fail();
             break;
         }
         wp_count = densify_route(raw_route, wp_count,
                                  waypoints, PATH_WAYPOINT_COUNT);
         if (wp_count < 2U)
         {
-            runner_stop(PATH_REASON_STOP_BUILD);
+            /* 加密点数超预算:参数/场地错误 -> 锁存 */
+            runner_fault_latch(PATH_REASON_STOP_BUILD_PARAM);
             break;
         }
 
@@ -2377,7 +2579,7 @@ void PathRunner_Run(void)
                               trajectory, PATH_SPLINE_SAMPLES,
                               &trajectory_count))
         {
-            runner_stop(PATH_REASON_STOP_BUILD);
+            runner_fault_latch(PATH_REASON_STOP_BUILD_PARAM);
             break;
         }
         /* 整形 + 弧长重采样 + 验收循环 */
@@ -2404,11 +2606,13 @@ void PathRunner_Run(void)
             }
             if (!built)
             {
-                runner_stop(PATH_REASON_STOP_BUILD);
+                /* 输入位姿合法但轨迹几何不过验收:参数错误(墙表/路点/限值) */
+                runner_fault_latch(PATH_REASON_STOP_BUILD_PARAM);
                 break;
             }
         }
 
+        build_fail_count = 0U;   /* 构建成功:清零 BUILD 失败计数 */
         state = PATH_STATE_RUN;
         reason = PATH_REASON_RUN;
         run_start_ms = now_ms;
@@ -2421,73 +2625,157 @@ void PathRunner_Run(void)
         break;
 
     case PATH_STATE_ARRIVED:
-        /* 到达:锁存,不自动恢复 */
+        /* 到达:锁存,仅人工接管/急停可离开 */
         break;
 
-    case PATH_STATE_STOPPED:
-        /* P0-3 瞬态故障恢复:连续健康 PATH_RECOVER_MS 后重新布防
-         * (重新按当前位置规划),限 PATH_RECOVER_MAX_TIMES 次;
-         * BUILD/NUMERIC/HEADING/TIMEOUT 等确定性故障不自动恢复 */
+    case PATH_STATE_SAFE_STOP:
+        /* 瞬态故障安全停车:静置去抖后进入恢复检查;
+         * 预算耗尽或不可自动恢复的故障 -> 锁存 */
+        if (!reason_auto_recoverable(reason))
         {
-            bool transient = (reason == PATH_REASON_STOP_UPPER_LOST) ||
-                             (reason == PATH_REASON_STOP_IMU_LOST) ||
-                             (reason == PATH_REASON_STOP_LASER_LOST) ||
-                             (reason == PATH_REASON_STOP_MOTOR_LOST) ||
-                             (reason == PATH_REASON_STOP_LASER_FRONT);
+            /* 例如人工链路丢失:等待人工重新接管,不自动重启 */
+            break;
+        }
+        if (recover_count_in_window(now_ms) >= PATH_RECOVER_MAX_TIMES)
+        {
+            runner_fault_latch(PATH_REASON_STOP_RECOVER_FAIL);
+            break;
+        }
+        if ((uint32_t)(now_ms - state_start_ms) >= PATH_RECOVER_SETTLE_MS)
+        {
+            state = PATH_STATE_RECOVER_CHECK;
+            state_start_ms = now_ms;
+            recover_healthy_since = 0U;
+            recover_heading_since = 0U;
+        }
+        break;
 
-            if (transient && (recover_count < PATH_RECOVER_MAX_TIMES))
+    case PATH_STATE_RECOVER_CHECK:
+        /* 恢复确认:连续健康 PATH_RECOVER_MS + 朝向复查通过才重新布防 */
+        {
+            imu_data_t imu;
+            float lf;
+            float ll;
+            bool lf_ok;
+            bool ll_ok;
+            bool imu_ok;
+            bool healthy;
+            float fyaw;
+
+            imu_ok = runner_read_and_fuse(now_ms, dt_s, 0.0f, 0.0f,
+                                          &imu, &lf, &lf_ok, &ll, &ll_ok);
+            PathFusion_Get(NULL, NULL, &fyaw);
+
+            healthy = imu_ok && lf_ok && motors_online() &&
+                      !PathFusion_IsUpperLost(now_ms) &&
+                      PathFusion_HasUpper() &&
+                      (PathFusion_DataAge(now_ms) <= PATH_UPPER_DATA_STOP_MS);
+
+            /* 激光急停:障碍清除到 >14cm 或回到"墙吻合"才恢复 */
+            if (reason == PATH_REASON_STOP_LASER_FRONT)
             {
-                imu_data_t imu;
-                float lf;
-                float ll;
-                bool lf_ok;
-                bool ll_ok;
-                bool imu_ok;
-                bool healthy;
+                healthy = healthy &&
+                          ((lf > (PATH_LASER_STOP_DIST_M + 0.02f)) ||
+                           laser_wall_ok(lf));
+            }
 
-                imu_ok = runner_read_and_fuse(now_ms, dt_s, 0.0f, 0.0f,
-                                              &imu, &lf, &lf_ok, &ll, &ll_ok);
-                healthy = imu_ok && lf_ok && motors_online() &&
-                          !PathFusion_IsUpperLost(now_ms) &&
-                          PathFusion_HasUpper();
-                /* 激光急停:障碍必须清除才恢复,否则每 1s 停-启-停
-                 * 循环反复刹车。判定:读数 > 14cm(无障碍),或贴墙
-                 * 场景(窗口期望墙)读数回到"墙吻合"(期望-5cm 以上)
-                 * ——车停在贴墙通道里时读数本就在 12~14cm,按绝对
-                 * 阈值判会永远无法恢复(死锁,仿真复现) */
-                if (reason == PATH_REASON_STOP_LASER_FRONT)
-                {
-                    healthy = healthy &&
-                              ((lf > (PATH_LASER_STOP_DIST_M + 0.02f)) ||
-                               laser_wall_ok(lf));
-                }
+            if (!healthy)
+            {
+                recover_healthy_since = 0U;
+                break;
+            }
 
-                if (healthy)
+            /* 朝向复查:故障恢复同样要求朝向在限内,超时仍不满足则锁存 */
+            if (fabsf(fyaw) > (PATH_START_YAW_LIMIT_DEG * DEG2RAD))
+            {
+                if (recover_heading_since == 0U)
                 {
-                    if (recover_healthy_since == 0U)
-                    {
-                        recover_healthy_since = now_ms;
-                    }
-                    else if ((uint32_t)(now_ms - recover_healthy_since) >=
-                             PATH_RECOVER_MS)
-                    {
-                        recover_healthy_since = 0U;
-                        recover_count++;
-                        imu_fault_cycles = 0U;
-                        motor_fault_cycles = 0U;
-                        laser_fault_cycles = 0U;
-                        last_i_near = 0U;
-                        state = PATH_STATE_WAIT_START;
-                        reason = PATH_REASON_WAIT_START;
-                        state_start_ms = now_ms;
-                    }
+                    recover_heading_since = now_ms;
                 }
-                else
+                else if ((uint32_t)(now_ms - recover_heading_since) >=
+                         PATH_RECOVER_HEADING_TIMEOUT_MS)
                 {
-                    recover_healthy_since = 0U;
+                    runner_fault_latch(PATH_REASON_STOP_HEADING);
                 }
+                break;
+            }
+            recover_heading_since = 0U;
+
+            if (recover_healthy_since == 0U)
+            {
+                recover_healthy_since = now_ms;
+            }
+            else if ((uint32_t)(now_ms - recover_healthy_since) >=
+                     PATH_RECOVER_MS)
+            {
+                /* 健康窗口通过:记录一次恢复,重新布防(重新确认位姿+朝向) */
+                recover_record(now_ms);
+                recover_healthy_since = 0U;
+                imu_fault_cycles = 0U;
+                motor_fault_cycles = 0U;
+                laser_fault_cycles = 0U;
+                last_i_near = 0U;
+                heading_confirmed = false;
+                state = PATH_STATE_WAIT_START;
+                reason = PATH_REASON_WAIT_START;
+                state_start_ms = now_ms;
             }
         }
+        break;
+
+    case PATH_STATE_SELF_CHECK:
+        /* 复位后自检:全部子系统连续健康才重新标定;
+         * 失败/超时 -> 锁存(不回到运动) */
+        {
+            imu_data_t imu;
+            float lf;
+            float ll;
+            bool lf_ok;
+            bool ll_ok;
+            bool imu_ok;
+            bool healthy;
+
+            Chassis_StopAll();
+            imu_ok = runner_read_and_fuse(now_ms, dt_s, 0.0f, 0.0f,
+                                          &imu, &lf, &lf_ok, &ll, &ll_ok);
+            healthy = imu_ok && lf_ok && motors_online() &&
+                      !PathFusion_IsUpperLost(now_ms) &&
+                      PathFusion_HasUpper() &&
+                      (PathFusion_DataAge(now_ms) <= PATH_UPPER_DATA_STOP_MS);
+
+            if (!healthy)
+            {
+                selfcheck_healthy_since = 0U;
+                if ((uint32_t)(now_ms - state_start_ms) > PATH_SELFCHECK_TIMEOUT_MS)
+                {
+                    runner_fault_latch(PATH_REASON_STOP_SELFCHECK);
+                }
+                break;
+            }
+
+            if (selfcheck_healthy_since == 0U)
+            {
+                selfcheck_healthy_since = now_ms;
+            }
+            else if ((uint32_t)(now_ms - selfcheck_healthy_since) >=
+                     PATH_SELFCHECK_MS)
+            {
+                /* 自检通过:重新标定陀螺零偏,再走 CALIB */
+                selfcheck_healthy_since = 0U;
+                PathFusion_ResetCalib();
+                state = PATH_STATE_CALIB;
+                state_start_ms = now_ms;
+                reason = PATH_REASON_CALIB;
+            }
+        }
+        break;
+
+    case PATH_STATE_FAULT_LATCH:
+        /* 锁存故障:刹车已锁存,等待人工复位/接管(由仲裁器处理) */
+        break;
+
+    case PATH_STATE_MANUAL_OVERRIDE:
+        /* 人工接管:底盘由 PathRunner_Arbitrate 按人工指令驱动 */
         break;
 
     default:
@@ -2500,10 +2788,24 @@ void PathRunner_Run(void)
     PathFusion_GetStats(&debug.fusion_xy_rejects, &debug.fusion_yaw_rejects,
                         &debug.upper_frames);
     PcLink_GetStats(&debug.pc_frames, &debug.crc_errors);
+    if (fault_ctx_valid)
+    {
+        debug.fault_code = fault_ctx.code;
+        debug.fault_x_m = fault_ctx.x_m;
+        debug.fault_y_m = fault_ctx.y_m;
+        debug.fault_timestamp_ms = fault_ctx.timestamp_ms;
+    }
 
     /* 回传状态帧 */
-    PcLink_SetStatus((uint8_t)state,
-                     (state == PATH_STATE_STOPPED) ? (uint8_t)reason : 0U);
+    {
+        uint8_t status_error = 0U;
+        if ((state == PATH_STATE_SAFE_STOP) ||
+            (state == PATH_STATE_FAULT_LATCH))
+        {
+            status_error = (uint8_t)reason;
+        }
+        PcLink_SetStatus((uint8_t)state, status_error);
+    }
 
 #if PATH_DEBUG && defined(PATH_DEBUG_UART_HANDLE)
     if ((uint32_t)(now_ms - last_debug_ms) >= PATH_DEBUG_PERIOD_MS)
@@ -2514,10 +2816,127 @@ void PathRunner_Run(void)
 #endif
 }
 
+/* ---- 控制仲裁:急停 > 人工 > 自主 ---- */
+
+path_arb_t PathPlanner_Arbiter(void)
+{
+    if (ComputerLink_EstopLatched())
+    {
+        return PATH_ARB_ESTOP;
+    }
+    if (state == PATH_STATE_MANUAL_OVERRIDE)
+    {
+        return PATH_ARB_MANUAL;
+    }
+    return PATH_ARB_AUTONOMOUS;
+}
+
+/* commTask 每 1ms 调用:执行急停/人工/自主底盘指令仲裁(唯一写底盘入口) */
+void PathRunner_Arbitrate(void)
+{
+    computer_cmd_t cmd;
+    uint8_t action;
+
+    /* 1. 急停:最高优先级,锁存刹车,屏蔽一切运动与动作 */
+    if (ComputerLink_EstopLatched())
+    {
+        if ((state != PATH_STATE_FAULT_LATCH) ||
+            (reason != PATH_REASON_STOP_ESTOP))
+        {
+            state = PATH_STATE_FAULT_LATCH;
+            reason = PATH_REASON_STOP_ESTOP;
+            record_fault_context(PATH_REASON_STOP_ESTOP);
+            state_start_ms = HAL_GetTick();
+            last_cmd_vx = 0.0f;
+            last_cmd_vy = 0.0f;
+            last_cmd_w = 0.0f;
+            Chassis_StopAll();
+        }
+        return;
+    }
+
+    /* 2. 人工复位(急停清除帧 A5 5D 00):清预算,强制重新自检+标定 */
+    if (ComputerLink_ResetRequested())
+    {
+        recover_reset_budget();
+        build_fail_count = 0U;
+        reset_fault_context();
+        heading_confirmed = false;
+        imu_fault_cycles = 0U;
+        motor_fault_cycles = 0U;
+        laser_fault_cycles = 0U;
+        last_i_near = 0U;
+        if (state == PATH_STATE_FAULT_LATCH)
+        {
+            /* 人工复位后必经 SELF_CHECK -> CALIB,不直接回 WAIT_START */
+            state = PATH_STATE_SELF_CHECK;
+            reason = PATH_REASON_SELFCHECK;
+            state_start_ms = HAL_GetTick();
+            selfcheck_healthy_since = 0U;
+            Chassis_StopAll();
+        }
+    }
+
+    /* 3. 人工接管:仅显式手动模式命令(A5 5E 01)触发切换 */
+    if (ComputerLink_ManualRequested() &&
+        (state != PATH_STATE_MANUAL_OVERRIDE))
+    {
+        state = PATH_STATE_MANUAL_OVERRIDE;
+        reason = PATH_REASON_MANUAL_OVERRIDE;
+        state_start_ms = HAL_GetTick();
+        recover_healthy_since = 0U;
+        recover_heading_since = 0U;
+        /* 立即停住自主运动,等待/执行人工指令 */
+        (void)Chassis_SetVelocity(0, 0, 0);
+    }
+
+    /* 4. 人工恢复自主(A5 5E 00):重新布防并重新确认位姿/朝向 */
+    if (ComputerLink_AutoResumeRequested() &&
+        ((state == PATH_STATE_MANUAL_OVERRIDE) ||
+         (state == PATH_STATE_SAFE_STOP)))
+    {
+        heading_confirmed = false;
+        state = PATH_STATE_WAIT_START;
+        reason = PATH_REASON_WAIT_START;
+        state_start_ms = HAL_GetTick();
+        Chassis_StopAll();
+        return;
+    }
+
+    /* 5. 人工控制:执行手动速度/动作;链路丢失则安全停车 */
+    if (state == PATH_STATE_MANUAL_OVERRIDE)
+    {
+        if (ComputerLink_GetCommand(&cmd))
+        {
+            (void)Chassis_SetVelocity(cmd.vx, cmd.vy, cmd.z);
+        }
+        if (ComputerLink_GetAction(&action))
+        {
+            (void)Action_Request((action_cmd_t)action);
+        }
+        /* 人工控制中链路丢失:安全停车(瞬态,等待人工重新接管) */
+        if (!ComputerLink_LinkOnline())
+        {
+            runner_safe_stop(PATH_REASON_STOP_MANUAL_LINK);
+        }
+        return;
+    }
+
+    /* 6. 自主:仅 RUN 由 runner_step 写底盘,其余状态由各 case 保持刹车;
+     * 丢弃未授权的手动速度/动作帧(模式切换必须靠显式模式命令) */
+    {
+        computer_cmd_t discard_cmd;
+        uint8_t discard_action;
+        (void)ComputerLink_GetCommand(&discard_cmd);
+        (void)ComputerLink_GetAction(&discard_action);
+    }
+}
+
+/* 兼容旧接口:仅"自主且处于 RUN"时视为规划器独占底盘 */
 bool PathPlanner_OwnsChassis(void)
 {
-    /* 指令仲裁(P0-5):RUN 期间规划器独占底盘 */
-    return (state == PATH_STATE_RUN);
+    return (PathPlanner_Arbiter() == PATH_ARB_AUTONOMOUS) &&
+           (state == PATH_STATE_RUN);
 }
 
 void PathRunner_GetDebug(path_debug_t *out)
