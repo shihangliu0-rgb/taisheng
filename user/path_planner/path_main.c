@@ -1641,38 +1641,6 @@ static uint8_t laser_l_idx;
 static uint32_t laser_f_last_rx;
 static uint32_t laser_l_last_rx;
 
-/* 贴墙场景"墙吻合"判定(恢复块用):停止位置前向窗口内期望墙
- * 距离的最小值,与当前读数比较。贴墙通道里读数 12~14cm 是正常墙,
- * 不能按"障碍未清除"判,否则恢复永久死锁 */
-static bool laser_wall_ok(float lf)
-{
-    float win;
-    uint16_t j;
-
-    if ((trajectory_count == 0U) || (last_i_near >= trajectory_count))
-    {
-        return false;
-    }
-    win = trajectory[last_i_near].exp_laser_front_m;
-    {
-        uint16_t j0 = (last_i_near > 3U) ?
-                      (uint16_t)(last_i_near - 3U) : 0U;
-        for (j = j0;
-             (j < trajectory_count) && (j <= last_i_near + 15U); j++)
-        {
-            if (trajectory[j].exp_laser_front_m < win)
-            {
-                win = trajectory[j].exp_laser_front_m;
-            }
-        }
-    }
-    if (win > (PATH_LASER_MAX_RANGE_M + 0.03f))
-    {
-        return false;   /* 前方无期望墙,不是贴墙场景 */
-    }
-    return (lf >= (win - PATH_LASER_EXPECTED_MARGIN_M));
-}
-
 /* 四轮电机是否全部在线(P0-3 恢复判定) */
 static bool motors_online(void)
 {
@@ -1934,6 +1902,8 @@ static void runner_step(uint32_t now_ms, float dt_s)
     float v_used;
     float exp_l;
     float exp_f;
+    float dir_body_x;
+    bool target_lateral;
     bool expected_wall;
     float tx;
     float ty;
@@ -2045,23 +2015,7 @@ static void runner_step(uint32_t now_ms, float dt_s)
     last_i_near = i_near;
     v_ref = trajectory[i_near].v_ref;
     exp_l = trajectory[i_near].exp_laser_left_m;
-    exp_f = trajectory[i_near].exp_laser_front_m;   /* 期望墙门控用 */
-    {
-        /* 双向窗口最小值(后方 3 点 + 前方 15 点):贴墙通道的轨迹
-         * 采样可能恰好跳过墙端(x=2.003 vs 墙B 东端 2.000),窗口只看
-         * 前方会漏掉后方 x=1.98 的贴墙点,把真实墙读成障碍急停
-         * (仿真复现);窗口 min 判"贴墙场景" */
-        uint16_t j;
-        uint16_t j0 = (i_near > 3U) ? (uint16_t)(i_near - 3U) : 0U;
-        for (j = j0;
-             (j < trajectory_count) && (j <= i_near + 15U); j++)
-        {
-            if (trajectory[j].exp_laser_front_m < exp_f)
-            {
-                exp_f = trajectory[j].exp_laser_front_m;
-            }
-        }
-    }
+    exp_f = trajectory[i_near].exp_laser_front_m;   /* 此前算出未用,现参与期望墙门控 */
 
     /* 数据降级限速(在查表后、激光兜底前统一钳制) */
     if (PathFusion_DataAge(now_ms) > PATH_UPPER_DEGRADE_MS)
@@ -2089,6 +2043,13 @@ static void runner_step(uint32_t now_ms, float dt_s)
         lf = PATH_LASER_MAX_RANGE_M;
     }
 
+    /* 车体纵向分量 */
+    {
+        float fwd_x = -sinf(fyaw);
+        float fwd_y = cosf(fyaw);
+        dir_body_x = ((tx - fx) / L) * fwd_x + ((ty - fy) / L) * fwd_y;
+    }
+    target_lateral = (fabsf(dir_body_x) <= PATH_LASER_LATERAL_DIR_MAX);
     expected_wall = (exp_f <= (PATH_LASER_MAX_RANGE_M + 0.03f));
 
     if (lf >= (PATH_LASER_MAX_RANGE_M - 1e-4f))
@@ -2104,21 +2065,19 @@ static void runner_step(uint32_t now_ms, float dt_s)
     }
     else if (lf <= PATH_LASER_STOP_DIST_M)
     {
-        if (expected_wall &&
-            (lf > PATH_LASER_WALL_STOP_DIST_M))
+        if (expected_wall && target_lateral)
         {
-            /* 期望墙(贴墙通道/转弯段):7~12cm 蠕行回中,不限目标
-             * 方向——贴墙转弯时目标可能是纵向,方向由纯追踪给出,
-             * 低速安全;读数继续掉到 7cm 才急停 */
+            /* 期望墙 + 横向目标:贴墙漂移,沿路径蠕行回中 */
             v_used = (v_ref < PATH_LASER_RECOVERY_V_MS) ?
                      v_ref : PATH_LASER_RECOVERY_V_MS;
             reason = PATH_REASON_LASER_SLOW;
         }
         else
         {
-            /* 真实障碍(非期望墙)或期望墙已贴到 7cm:真正停机——
-             * 进 STOPPED、刹车锁存、error=6 上报、手动解除屏蔽;
-             * 障碍清除后由瞬态恢复自动重布防 */
+            /* 真实障碍(非期望墙):真正停机——进 STOPPED、刹车锁存、
+             * error=6 上报、手动解除屏蔽;障碍清除后由瞬态恢复自动
+             * 重布防(此前只置 reason,state 仍 RUN:手动被屏蔽、
+             * 无刹车、yaw-lock 仍可能输出 z 原地转,审计大问题 A/B) */
             runner_stop(PATH_REASON_STOP_LASER_FRONT);
             return;
         }
@@ -2450,16 +2409,12 @@ void PathRunner_Run(void)
                 healthy = imu_ok && lf_ok && motors_online() &&
                           !PathFusion_IsUpperLost(now_ms) &&
                           PathFusion_HasUpper();
-                /* 激光急停:障碍必须清除才恢复,否则每 1s 停-启-停
-                 * 循环反复刹车。判定:读数 > 14cm(无障碍),或贴墙
-                 * 场景(窗口期望墙)读数回到"墙吻合"(期望-5cm 以上)
-                 * ——车停在贴墙通道里时读数本就在 12~14cm,按绝对
-                 * 阈值判会永远无法恢复(死锁,仿真复现) */
+                /* 激光急停:障碍必须清除(距离 > 阈值 + 2cm)才恢复,
+                 * 否则每 1s 停-启-停循环反复刹车 */
                 if (reason == PATH_REASON_STOP_LASER_FRONT)
                 {
                     healthy = healthy &&
-                              ((lf > (PATH_LASER_STOP_DIST_M + 0.02f)) ||
-                               laser_wall_ok(lf));
+                              (lf > (PATH_LASER_STOP_DIST_M + 0.02f));
                 }
 
                 if (healthy)
