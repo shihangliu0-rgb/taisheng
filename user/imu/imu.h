@@ -8,6 +8,10 @@
 
 typedef struct
 {
+    float acc_x_mps2;         // X 轴原始线加速度(m/s^2)
+    float acc_y_mps2;         // Y 轴原始线加速度(m/s^2)
+    uint32_t acc_sequence;    // 加速度有效帧序号
+    bool acc_valid;           // 是否收到过有效加速度帧
     float gyro_z_deg_s;       // Z 轴原始角速度
     float yaw_deg;            // 原始偏航角
     uint32_t gyro_sequence;   // 角速度有效帧序号
@@ -25,6 +29,7 @@ typedef struct
     uint32_t last_valid_ms;        // 最近有效帧的系统时间
     uint32_t last_gyro_ms;         // 最近有效角速度帧的系统时间
     uint32_t last_yaw_ms;          // 最近有效欧拉角帧的系统时间
+    uint32_t last_acc_ms;          // 最近有效加速度帧的系统时间
 } imu_stats_t;
 
 /**

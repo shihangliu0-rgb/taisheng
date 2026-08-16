@@ -68,6 +68,7 @@ typedef struct
     uint32_t next_action_ms;
     uint32_t last_gyro_sequence;   
     uint32_t last_yaw_sequence;
+    uint32_t last_acc_sequence;
     uint32_t next_recovery_ms;
     float gyro_bias_sum_deg_s;
     uint16_t gyro_bias_sample_count;
@@ -130,6 +131,7 @@ enum
     IMU_CMD_SET_OUTPUT_485,
     IMU_CMD_SET_BAUD_921600,
     IMU_CMD_ENABLE_ACTIVE,
+    IMU_CMD_OPEN_ACCEL,
     IMU_CMD_OPEN_GYRO,
     IMU_CMD_OPEN_EULER,
     IMU_CMD_CLOSE_QUAT,
@@ -143,6 +145,7 @@ static const imu_command_t imu_commands[IMU_CMD_COUNT] = {
     [IMU_CMD_SET_OUTPUT_485] = {{0xAAU, 0x0AU, 0x01U, 0x0DU}, 4U},
     [IMU_CMD_SET_BAUD_921600] = {{0xAAU, 0x0DU, 0x01U, 0x05U, 0x0DU}, 5U},
     [IMU_CMD_ENABLE_ACTIVE] = {{0xAAU, 0x01U, 0x13U, 0x0DU}, 4U},
+    [IMU_CMD_OPEN_ACCEL] = {{0xAAU, 0x01U, 0x14U, 0x0DU}, 4U},
     [IMU_CMD_OPEN_GYRO] = {{0xAAU, 0x01U, 0x15U, 0x0DU}, 4U},
     [IMU_CMD_OPEN_EULER] = {{0xAAU, 0x01U, 0x16U, 0x0DU}, 4U},
     [IMU_CMD_CLOSE_QUAT] = {{0xAAU, 0x01U, 0x07U, 0x0DU}, 4U},
@@ -154,6 +157,7 @@ static const uint8_t config_command_ids[] = {
     IMU_CMD_SET_OUTPUT_485,
     IMU_CMD_SET_BAUD_921600,
     IMU_CMD_ENABLE_ACTIVE,
+    IMU_CMD_OPEN_ACCEL,
     IMU_CMD_OPEN_GYRO,
     IMU_CMD_OPEN_EULER,
     IMU_CMD_CLOSE_QUAT,
@@ -296,6 +300,13 @@ static void reset_yaw(void)
 {
     yaw_zero_ref_deg = 0.0f;
     yaw_zero_ref_valid = false;
+    /* 航向重新归零后世界系基准改变，累计位置一并清零 */
+    ImuAlgo_ResetPosition(&imu_algo);
+    imu_data.vel_world_x_mps = 0.0f;
+    imu_data.vel_world_y_mps = 0.0f;
+    imu_data.pos_world_x_m = 0.0f;
+    imu_data.pos_world_y_m = 0.0f;
+    imu_data.pos_valid = false;
     /* 复位自有算法的 Yaw 卡尔曼，使下一帧重新以首帧对齐 */
     imu_algo.x_yaw = 0.0f;
     imu_algo.p_yaw = 1.0f;
@@ -485,6 +496,64 @@ static void process_yaw(const imu_raw_data_t *raw_data)
     imu_data.yaw_valid = true;
 }
 
+static void process_accel(const imu_raw_data_t *raw_data)
+{
+    float acc_filt_x;
+    float acc_filt_y;
+    float yaw_deg;
+    float dt;
+
+    /* 需先完成零偏采样与航向归零，否则旋转矩阵无意义。 */
+    if ((imu_init.step != IMU_INIT_COMPLETE) || !raw_data->acc_valid ||
+        !imu_data.yaw_valid ||
+        (raw_data->acc_sequence == imu_init.last_acc_sequence))
+    {
+        return;
+    }
+    imu_init.last_acc_sequence = raw_data->acc_sequence;
+
+    /* 第 4 层：异常线性加速度保护 */
+    if (ImuAlgo_CheckAccValid(&imu_algo, raw_data->acc_x_mps2,
+                              raw_data->acc_y_mps2) == 0U)
+    {
+        return;
+    }
+
+    /* 第 4 层：二阶 Butterworth 低通，抑制电机与车体高频振动 */
+    ImuAlgo_BiquadFilterAcc(&imu_algo, raw_data->acc_x_mps2,
+                            raw_data->acc_y_mps2,
+                            &acc_filt_x, &acc_filt_y);
+
+    /* 第 7/5/2 层：滑窗振动判断、ZUPT 零速驻停与加速度零偏在线估计 */
+    ImuAlgo_UpdateZuptAndBias(&imu_algo, acc_filt_x, acc_filt_y);
+
+    /* 第 3 层：按当前航向把机体加速度投影到世界系并去零偏 */
+    yaw_deg = imu_data.yaw_deg;
+    ImuAlgo_RotateAndCompensateAcc(&imu_algo, acc_filt_x, acc_filt_y, yaw_deg);
+
+    /* 第 11 层：地面机器人非全向约束(麦轮车已在 imu_algo.h 关闭) */
+    ImuAlgo_ApplyNonHolonomicConstraint(&imu_algo, yaw_deg);
+
+    /* 第 8/9 层：DWT 微秒 dt 梯形二次积分 + 三状态卡尔曼预测 */
+    dt = ImuAlgo_GetDtSeconds(&imu_algo);
+    ImuAlgo_PredictDoubleIntegral(&imu_algo, dt);
+
+    /* 第 5/9 层：ZUPT 触发时以 v=0 观测修正速度/位置/零偏 */
+    if (ImuAlgo_IsZuptActive(&imu_algo) != 0U)
+    {
+        ImuAlgo_UpdateZuptKalman(&imu_algo);
+    }
+
+    imu_data.acc_world_x_mps2 = ImuAlgo_GetAccWorldX(&imu_algo);
+    imu_data.acc_world_y_mps2 = ImuAlgo_GetAccWorldY(&imu_algo);
+    imu_data.vel_world_x_mps = ImuAlgo_GetVelX(&imu_algo);
+    imu_data.vel_world_y_mps = ImuAlgo_GetVelY(&imu_algo);
+    imu_data.pos_world_x_m = ImuAlgo_GetPosX(&imu_algo);
+    imu_data.pos_world_y_m = ImuAlgo_GetPosY(&imu_algo);
+    imu_data.zupt_active = (ImuAlgo_IsZuptActive(&imu_algo) != 0U);
+    imu_data.pos_valid = true;
+}
+
 static bool sample_is_fresh(bool valid, uint32_t now_ms,
                             uint32_t sample_ms)
 {
@@ -597,6 +666,7 @@ void ImuMain_Run1ms(void)
     run_init_state(now_ms, &raw_data);
     process_gyro(&raw_data);
     process_yaw(&raw_data);
+    process_accel(&raw_data);
     update_health(now_ms, &raw_data);
     recover_stale_streams(now_ms);
 }
@@ -764,6 +834,21 @@ bool ImuMain_GetData(imu_data_t *data)
  * @param uart 上位机串口句柄
  * @retval HAL 状态
  */
+HAL_StatusTypeDef ImuMain_ResetPosition(void)
+{
+    if (!initialized)
+    {
+        return HAL_ERROR;
+    }
+
+    ImuAlgo_ResetPosition(&imu_algo);
+    imu_data.vel_world_x_mps = 0.0f;
+    imu_data.vel_world_y_mps = 0.0f;
+    imu_data.pos_world_x_m = 0.0f;
+    imu_data.pos_world_y_m = 0.0f;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef ImuMain_SendYaw(UART_HandleTypeDef *uart)
 {
     uint8_t frame[IMU_YAW_FRAME_LENGTH];

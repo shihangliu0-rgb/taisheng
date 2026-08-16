@@ -21,6 +21,12 @@ typedef struct
     float yaw_deg;                 // 归零并滤波后的偏航角，单位为 deg
     float gyro_z_deg_s;            // 零偏修正后的 Z 轴角速度，单位为 deg/s
     float gyro_bias_deg_s;         // 上电采集得到的 Z 轴角速度零偏
+    float acc_world_x_mps2;        // 世界系 X 轴线加速度(去零偏,m/s^2)
+    float acc_world_y_mps2;        // 世界系 Y 轴线加速度(去零偏,m/s^2)
+    float vel_world_x_mps;         // 世界系 X 轴速度(ZUPT 修正,m/s)
+    float vel_world_y_mps;         // 世界系 Y 轴速度(ZUPT 修正,m/s)
+    float pos_world_x_m;           // 世界系 X 轴累计位置(m)
+    float pos_world_y_m;           // 世界系 Y 轴累计位置(m)
     imu_state_t state;             // 当前初始化或运行状态
     uint32_t last_rx_ms;           // 最近有效帧的系统时间
     uint32_t valid_frame_count;    // 有效帧累计数量
@@ -35,6 +41,8 @@ typedef struct
     bool online;                   // 最近 100 ms 内两类控制数据是否都有效
     bool yaw_hold_enabled;         // 航向保持功能是否使能
     bool yaw_hold_active;          // 当前是否由航向闭环控制旋转
+    bool zupt_active;              // 当前是否处于 ZUPT 零速驻停
+    bool pos_valid;                // 位置/速度解算是否已开始输出
 } imu_data_t;
 
 //航向环
@@ -110,6 +118,12 @@ void ImuMain_EnableYawHold(bool enabled);
  * @retval 是否获取成功
  */
 bool ImuMain_GetData(imu_data_t *data);
+
+/**
+ * @brief 清零惯导累计位置与速度(不影响航向)
+ * @retval HAL 状态
+ */
+HAL_StatusTypeDef ImuMain_ResetPosition(void);
 
 /**
  * @brief 通过上位机串口回传当前 yaw 角

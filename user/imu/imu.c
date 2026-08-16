@@ -11,11 +11,14 @@
 #define IMU_FRAME_HEADER_1        0x55U
 #define IMU_FRAME_HEADER_2        0xAAU
 #define IMU_FRAME_END             0x0AU
+#define IMU_FRAME_TYPE_ACCEL      0x01U
 #define IMU_FRAME_TYPE_GYRO       0x02U
 #define IMU_FRAME_TYPE_EULER      0x03U
 #define IMU_FRAME_LENGTH_STANDARD 19U
 #define IMU_FRAME_LENGTH_QUAT     23U
-#define IMU_VALUE_OFFSET          12U
+#define IMU_VALUE_OFFSET          12U   /* Z 轴 float 偏移(陀螺 Z / 欧拉 yaw) */
+#define IMU_VALUE_OFFSET_X        4U    /* X 轴 float 偏移(加速度 X) */
+#define IMU_VALUE_OFFSET_Y        8U    /* Y 轴 float 偏移(加速度 Y) */
 
 typedef struct
 {
@@ -174,8 +177,36 @@ static bool parse_frame(void)
     }
 
     if ((frame_type != IMU_FRAME_TYPE_GYRO) &&
-        (frame_type != IMU_FRAME_TYPE_EULER))
+        (frame_type != IMU_FRAME_TYPE_EULER) &&
+        (frame_type != IMU_FRAME_TYPE_ACCEL))
     {
+        return true;
+    }
+
+    /* 加速度帧：X/Y 为水平分量，分别位于偏移 4 与 8(小端 float)。 */
+    if (frame_type == IMU_FRAME_TYPE_ACCEL)
+    {
+        float acc_x;
+        float acc_y;
+
+        memcpy(&acc_x, &imu_driver.frame_buffer[IMU_VALUE_OFFSET_X],
+               sizeof(acc_x));
+        memcpy(&acc_y, &imu_driver.frame_buffer[IMU_VALUE_OFFSET_Y],
+               sizeof(acc_y));
+        if (isnan(acc_x) || isinf(acc_x) || isnan(acc_y) || isinf(acc_y))
+        {
+            return false;
+        }
+        if ((fabsf(acc_x) > 100.0f) || (fabsf(acc_y) > 100.0f))
+        {
+            return false;
+        }
+        imu_driver.raw_data.acc_x_mps2 = acc_x;
+        imu_driver.raw_data.acc_y_mps2 = acc_y;
+        imu_driver.raw_data.acc_sequence++;
+        imu_driver.raw_data.acc_valid = true;
+        imu_driver.stats.last_acc_ms = HAL_GetTick();
+        imu_driver.stats.last_valid_ms = imu_driver.stats.last_acc_ms;
         return true;
     }
 
