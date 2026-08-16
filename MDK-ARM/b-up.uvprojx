@@ -1563,6 +1563,16 @@
               <FilePath>../user/imu/imu.h</FilePath>
             </File>
             <File>
+              <FileName>imu_algo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/imu/imu_algo.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu_algo.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/imu/imu_algo.h</FilePath>
+            </File>
+            <File>
               <FileName>imu_main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../user/imu/imu_main.c</FilePath>

@@ -1,6 +1,7 @@
 #include "imu_main.h"
 
 #include "imu.h"
+#include "imu_algo.h"   /* 自有算法：Yaw 标量卡尔曼 / 角速度自适应低通 / 错帧保护 */
 #include "usart.h"
 
 #include <math.h>
@@ -36,14 +37,14 @@ static const imu_config_t imu_config = {
     .recovery_retry_ms = 2000U,
     .yaw_tx_period_ms = 50U,
     .yaw_control_period_ms = 5U,
-    .yaw_cmd_threshold = 3,
-    .yaw_linear_threshold = 2,
-    .kalman_q = 0.02f,
+    .yaw_cmd_threshold = 5,
+    .yaw_linear_threshold = 5,
+    .kalman_q = 0.02f,   /* 已弃用：Yaw 卡尔曼改由 imu_algo.h 的 IMU_ALGO_Q_YAW/R_YAW 控制 */
     .kalman_r = 3.0f,
-    .gyro_filter_q = 0.1f,
+    .gyro_filter_q = 0.1f, /* 已弃用：角速度改用 imu_algo 自适应一阶低通(alpha 静/动切换) */
     .gyro_filter_r = 2.0f,
     .yaw_tx_scale = 100.0f,
-    .yaw_deadzone_deg = 0.17f,
+    .yaw_deadzone_deg = 0.5f,
     .yaw_i_active_deg = 10.0f,
     .yaw_i_decay = 0.90f,
     .yaw_gyro_k = 5.0f
@@ -163,23 +164,21 @@ static imu_data_t imu_data;
 static imu_init_context_t imu_init;
 static float yaw_zero_ref_deg;
 static bool yaw_zero_ref_valid;
-static float yaw_kalman_estimate_deg;
-static float yaw_kalman_p;
-static bool yaw_kalman_valid;
 static bool initialized;
 static imu_yaw_control_t yaw_control = {
     .pid = {
         {
-            .kp = 0.4f, .ki = 0.0f, .kd = 0.0f,
-            .i_max = 8.0f, .out_max = 800.0f, .first_run = true
+            .kp = 1.8f, .ki = 0.25f, .kd = 1.8f,
+            .i_max = 8.0f, .out_max = 1000.0f, .first_run = true
         },
         {
-            .kp = 0.8f, .ki = 0.0f, .kd = 0.0f,
-            .i_max = 12.0f, .out_max = 100.0f, .first_run = true
+            .kp = 1.0f, .ki = 0.18f, .kd = 1.8f,
+            .i_max = 12.0f, .out_max = 250.0f, .first_run = true
         }
     }
 };
 static uint32_t last_yaw_tx_ms;
+static imu_algo_t imu_algo;   /* 自有算法实例(Yaw 卡尔曼 / 角速度滤波 / DWT dt) */
 
 static bool time_reached(uint32_t now_ms, uint32_t target_ms)
 {
@@ -231,6 +230,10 @@ static void reset_control_dynamics(void)
     reset_yaw_pid(&yaw_control.pid[IMU_YAW_PID_MOVE]);
     reset_yaw_pid(&yaw_control.pid[IMU_YAW_PID_STOP]);
     memset(&yaw_control.gyro_filter, 0, sizeof(yaw_control.gyro_filter));
+    /* 复位自有算法的角速度自适应低通与阶跃保护历史 */
+    imu_algo.gyro_filtered = 0.0f;
+    imu_algo.gyro_last_raw = 0.0f;
+    imu_algo.has_last_raw = 0U;
     yaw_control.last_update_ms = 0U;
     yaw_control.update_time_valid = false;
 }
@@ -246,29 +249,11 @@ static void suspend_yaw_control(void)
     imu_data.yaw_hold_active = false;
 }
 
-static float filter_gyro(float gyro_deg_s)   //一维卡尔曼滤波(角速度)
+static float filter_gyro(float gyro_deg_s)
 {
-    float gain;     //卡尔曼增益k
-
-    if (!yaw_control.gyro_filter.valid)
-    {
-        yaw_control.gyro_filter.estimate = gyro_deg_s;   //角速度估计值
-        yaw_control.gyro_filter.covariance = 1.0f;       //估计协方差p
-        yaw_control.gyro_filter.valid = true;
-    }
-    else
-    {
-        yaw_control.gyro_filter.covariance +=
-            imu_config.gyro_filter_q; //Q为过程噪声
-        gain = yaw_control.gyro_filter.covariance /
-               (yaw_control.gyro_filter.covariance +
-                imu_config.gyro_filter_r);  //r为测量噪声
-        yaw_control.gyro_filter.estimate += gain *
-            (gyro_deg_s - yaw_control.gyro_filter.estimate);
-        yaw_control.gyro_filter.covariance *= 1.0f - gain;
-    }
-
-    return roundf(yaw_control.gyro_filter.estimate * 10.0f) / 10.0f;
+    /* 改用自有算法：角速度自适应一阶低通(静止 alpha=0.02 强滤波 / 运动 alpha=0.30 低延迟)，
+     * 替换原一维卡尔曼(gyro_filter_q/r)。阈值见 imu_algo.h 的 IMU_ALGO_GYRO_* 调参区。 */
+    return ImuAlgo_AdaptiveFilterGyro(&imu_algo, gyro_deg_s);
 }
 
 static float calculate_yaw_pid(imu_yaw_pid_t *pid, float error_deg)
@@ -302,36 +287,19 @@ static float calculate_yaw_pid(imu_yaw_pid_t *pid, float error_deg)
 
 static float filter_yaw(float measured_yaw_deg)
 {
-    float innovation_deg; //观测值与预测值的差值
-    float kalman_gain;    //卡尔曼增益k
-
-    // 标量卡尔曼参数，并对跨越正负 180 度的误差归一化
-    if (!yaw_kalman_valid)
-    {
-        yaw_kalman_estimate_deg = normalize_angle(measured_yaw_deg);
-        yaw_kalman_p = 1.0f;
-        yaw_kalman_valid = true;
-        return yaw_kalman_estimate_deg;
-    }
-
-    // 更新卡尔曼滤波器的协方差
-    yaw_kalman_p += imu_config.kalman_q;
-    innovation_deg = normalize_angle(measured_yaw_deg -
-                                     yaw_kalman_estimate_deg);
-    kalman_gain = yaw_kalman_p / (yaw_kalman_p + imu_config.kalman_r);
-    yaw_kalman_estimate_deg = normalize_angle(
-        yaw_kalman_estimate_deg + kalman_gain * innovation_deg);
-    yaw_kalman_p = (1.0f - kalman_gain) * yaw_kalman_p;
-    return yaw_kalman_estimate_deg;
+    /* 改用自有算法：Yaw 标量一阶卡尔曼去杂波(含 ±180 跨零归一化)，
+     * 参数见 imu_algo.h 的 IMU_ALGO_Q_YAW / IMU_ALGO_R_YAW。 */
+    return ImuAlgo_ApplyYawKalmanDeg(&imu_algo, measured_yaw_deg);
 }
 
 static void reset_yaw(void)
 {
     yaw_zero_ref_deg = 0.0f;
     yaw_zero_ref_valid = false;
-    yaw_kalman_estimate_deg = 0.0f;
-    yaw_kalman_p = 1.0f;
-    yaw_kalman_valid = false;
+    /* 复位自有算法的 Yaw 卡尔曼，使下一帧重新以首帧对齐 */
+    imu_algo.x_yaw = 0.0f;
+    imu_algo.p_yaw = 1.0f;
+    imu_algo.kalman_yaw_inited = 0U;
     imu_data.yaw_deg = 0.0f;
     imu_data.yaw_valid = false;
     suspend_yaw_control();
@@ -453,6 +421,13 @@ static void process_gyro(const imu_raw_data_t *raw_data)
         return;
     }
     imu_init.last_gyro_sequence = raw_data->gyro_sequence;
+
+    /* 自有算法：异常角速度保护(绝对量程 2000 deg/s + 单帧阶跃 500 deg/s)，
+     * 错帧直接丢弃，避免污染零偏采样与航向环。 */
+    if (ImuAlgo_CheckGyroValid(&imu_algo, raw_data->gyro_z_deg_s) == 0U)
+    {
+        return;
+    }
 
     if (imu_init.step == IMU_INIT_SAMPLE_BIAS)
     {
@@ -579,6 +554,7 @@ HAL_StatusTypeDef ImuMain_Init(void)
     }
 
     memset(&imu_data, 0, sizeof(imu_data));
+    ImuAlgo_Init(&imu_algo);   /* 初始化自有算法(卡尔曼/滤波/DWT 微秒 dt) */
     if (Imu_Init(&huart1) != HAL_OK)
     {
         imu_data.state = IMU_STATE_ERROR;
