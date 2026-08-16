@@ -183,6 +183,9 @@ up_zero_step_t up_zero_step = UP_ZERO_DISABLE_RS;
 float up_rs_feedforward_nm;
 float up_dm_feedforward_nm;
 
+/* 首次标零时记录的 RS 左腿原始角度(未设零点, 为上电坐标系下的绝对角)。 */
+static float rs_l_first_zero_angle_deg;
+
 static bool finite_float(float value)
 {
     return (value == value) && (value <= FLT_MAX) && (value >= -FLT_MAX);
@@ -481,14 +484,54 @@ static bool dm_pair_ready(uint32_t now_ms)
            (abs_float(right.feedback.angle_deg) <= MOTOR_DONE_ERROR_DEG);
 }
 
+/**
+ * @brief 读取 RS 左腿(ID 39)当前反馈角度
+ * @param angle_deg 输出当前角度(输出轴, deg)
+ * @retval 是否读到有效的位置反馈
+ * @note  RS 电机上电后由驱动持续上报反馈帧, 此处只做读取, 不额外发查询指令。
+ */
+static bool read_rs_l_angle(float *angle_deg)
+{
+    rs_app_status_t status;
+
+    if (angle_deg == NULL)
+    {
+        return false;
+    }
+    if (!RsApp_GetStatus(&rs_app, RS_MOTOR_L_ID, HAL_GetTick(), &status))
+    {
+        return false;
+    }
+    /* 必须已收到过带位置字段的反馈, 否则角度无意义 */
+    if (!status.has_feedback ||
+        ((status.feedback.valid & RS_FDB_POSITION) == 0U) ||
+        !finite_float(status.feedback.angle_deg))
+    {
+        return false;
+    }
+
+    *angle_deg = status.feedback.angle_deg;
+    return true;
+}
+
+/**
+ * @brief 复位 RS 两腿的指令/目标坐标
+ * @param rs_l_deg 左腿当前角度。首次标零时左腿不设零点, 需用实测角度对齐,
+ *                 避免使能瞬间因指令与实际位置不符而突跳; 其余情况传 0。
+ */
+static void reset_rs_coordinates_from(float rs_l_deg)
+{
+    up_command_angles.rs_l_deg = rs_l_deg;
+    up_command_angles.rs_r_deg = 0.0f;
+    up_target_angles.rs_l_deg = rs_l_deg;
+    up_target_angles.rs_r_deg = 0.0f;
+    curve_start_angles.rs_l_deg = rs_l_deg;
+    curve_start_angles.rs_r_deg = 0.0f;
+}
+
 static void reset_rs_coordinates(void)
 {
-    up_command_angles.rs_l_deg = 0.0f;
-    up_command_angles.rs_r_deg = 0.0f;
-    up_target_angles.rs_l_deg = 0.0f;
-    up_target_angles.rs_r_deg = 0.0f;
-    curve_start_angles.rs_l_deg = 0.0f;
-    curve_start_angles.rs_r_deg = 0.0f;
+    reset_rs_coordinates_from(0.0f);
 }
 
 static void reset_dm_coordinates(void)
@@ -504,7 +547,9 @@ static void reset_dm_coordinates(void)
 static void start_all_motor_curve(float target_angle_deg, uint32_t now_ms)
 {
     curve_start_angles = up_command_angles;
-    up_target_angles.rs_l_deg = target_angle_deg;
+    /* RS 左腿首次标零未设零点, 仍处在上电坐标系, 故目标角 = 当前实测角 + 偏移,
+     * 即"转动固定角度的差值", 与其余三台(已设零点, 从 0 转到 target)等效。 */
+    up_target_angles.rs_l_deg = curve_start_angles.rs_l_deg + target_angle_deg;
     up_target_angles.rs_r_deg = target_angle_deg;
     up_target_angles.dm_l_deg = target_angle_deg;
     up_target_angles.dm_r_deg = target_angle_deg;
@@ -537,7 +582,8 @@ static bool all_motors_at_angle(uint32_t now_ms, float angle_deg)
            (rs_right.feedback.fault == 0U) &&
            (dm_left.feedback.fault == DM_FAULT_NONE) &&
            (dm_right.feedback.fault == DM_FAULT_NONE) &&
-           (abs_float(rs_left.feedback.angle_deg - angle_deg) <=
+           (abs_float(rs_left.feedback.angle_deg -
+                      (rs_l_first_zero_angle_deg + angle_deg)) <=
             MOTOR_DONE_ERROR_DEG) &&
            (abs_float(rs_right.feedback.angle_deg - angle_deg) <=
             MOTOR_DONE_ERROR_DEG) &&
@@ -641,8 +687,33 @@ static HAL_StatusTypeDef run_zero_sequence(uint32_t now_ms)
     case UP_ZERO_SET_RS:
         if (start_motor_index >= ARRAY_SIZE(rs_motor_config))
         {
-            reset_rs_coordinates();
+            /* 首次标零: 左腿不设零点, 保留上电原始坐标系, 并把指令对齐到
+             * 实测角度; 读不到反馈时退化为原来的 0 对齐。 */
+            if (up_state == UP_STATE_FIRST_ZERO)
+            {
+                float rs_l_now_deg;
+
+                if (!read_rs_l_angle(&rs_l_now_deg))
+                {
+                    rs_l_now_deg = 0.0f;
+                }
+                rs_l_first_zero_angle_deg = rs_l_now_deg;
+                reset_rs_coordinates_from(rs_l_now_deg);
+            }
+            else
+            {
+                reset_rs_coordinates();
+            }
             set_zero_step(UP_ZERO_SET_DM, now_ms);
+            break;
+        }
+        /* 首次标零跳过左腿(index 0)的设零点: 改为读当前角度后按差值转动,
+         * 到位后再在 UP_STATE_SECOND_ZERO 里设零点。 */
+        if ((up_state == UP_STATE_FIRST_ZERO) && (start_motor_index == 0U))
+        {
+            start_motor_index++;
+            start_cmd_sent = false;
+            start_due_ms = now_ms + MOTOR_START_DELAY_MS;
             break;
         }
         if (!start_cmd_sent)
@@ -1055,6 +1126,7 @@ HAL_StatusTypeDef Up_Init(void)
     up_rs_feedforward_nm = 0.0f;
     up_dm_feedforward_nm = 0.0f;
     rebase_state = UP_REBASE_IDLE;
+    rs_l_first_zero_angle_deg = 0.0f;
     up_state = UP_STATE_FIRST_ZERO;
     state_start_ms = HAL_GetTick();
     set_zero_step(UP_ZERO_DISABLE_RS, state_start_ms);
@@ -1071,6 +1143,7 @@ HAL_StatusTypeDef Up_HomeMotors(void)
     }
 
     stop_outputs();
+    rs_l_first_zero_angle_deg = 0.0f;
     reset_rs_coordinates();
     reset_dm_coordinates();
     up_state = UP_STATE_FIRST_ZERO;
