@@ -63,8 +63,22 @@ extern "C" {
 #endif
 
 /* ==========================================================================
- *  轴向符号 —— ★IMU 与底盘安装方向对齐用，实车标定后可能需翻转
- *  body 系: X 向右、Y 向前(与 chassis 一致)；经 Imu_GetYaw 旋到世界系。
+ *  坐标系约定(全链路已验证一致，勿随意更改)
+ * --------------------------------------------------------------------------
+ *  车体系: X = 向右为正, Y = 向前为正, Z 旋转 = 逆时针(CCW)为正
+ *          与 chassis_main.h 的 Chassis_SetVelocity(vx,vy,z) 完全一致。
+ *
+ *  IMU 竖直安装, 传感器原生为左手系, 故 imu_main.c 中:
+ *      yaw    = -raw_yaw     (process_yaw)
+ *      gyro_z = -(raw - bias)(process_gyro)
+ *  取负后统一为右手系(CCW 正), 与车体 Z 同号。
+ *
+ *  加速度帧 0x01: X@offset4(右), Y@offset8(前), Z@offset12(竖直,不用)。
+ *  世界系由 R(yaw) 正交旋转得到:
+ *      world_x = body_x*cos - body_y*sin
+ *      world_y = body_x*sin + body_y*cos
+ *
+ *  下面三个符号宏用于实车标定时翻转装反的轴, 默认全 +1.0 不翻转。
  * ========================================================================== */
 #ifndef FUSION_BODY_VX_SIGN
 #define FUSION_BODY_VX_SIGN      1.0f
