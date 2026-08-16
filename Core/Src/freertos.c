@@ -26,13 +26,16 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "action_api.h"
 #include "chassis_main.h"
+#include "computer_link.h"
+#include "dt35_pnp_link.h"
 #include "imu_main.h"
-#include "upper_protocol.h"
-#include "dt35_link.h"
-#include "xiaodianji_link.h"
+#include "lora_link.h"
+#include "mcu_link.h"
 #include "up_main.h"
 #include "usart.h"
+#include "gpio.h"
 
 /* USER CODE END Includes */
 
@@ -55,6 +58,13 @@
 /* USER CODE BEGIN Variables */
 
 /* USER CODE END Variables */
+/* Definitions for startupReminder */
+osThreadId_t startupReminderHandle;
+const osThreadAttr_t startupReminder_attributes = {
+  .name = "startupReminder",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for chassisTask */
 osThreadId_t chassisTaskHandle;
 const osThreadAttr_t chassisTask_attributes = {
@@ -82,6 +92,7 @@ const osThreadAttr_t commTask_attributes = {
 
 /* USER CODE END FunctionPrototypes */
 
+void StartStartupReminderTask(void *argument);
 void StartChassisTask(void *argument);
 void StartLiftTask(void *argument);
 void StartCommTask(void *argument);
@@ -135,6 +146,9 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
+  /* creation of startupReminder */
+  startupReminderHandle = osThreadNew(StartStartupReminderTask, NULL, &startupReminder_attributes);
+
   /* creation of chassisTask */
   chassisTaskHandle = osThreadNew(StartChassisTask, NULL, &chassisTask_attributes);
 
@@ -152,6 +166,39 @@ void MX_FREERTOS_Init(void) {
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
 
+}
+
+/* USER CODE BEGIN Header_StartStartupReminderTask */
+/**
+  * @brief  Function implementing the startupReminder thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartStartupReminderTask */
+__weak void StartStartupReminderTask(void *argument)
+{
+  /* USER CODE BEGIN StartStartupReminderTask */
+  (void)argument;
+
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+
+  /* 每次 MCU 复位后重新播放两声启动提示音。 */
+  for (uint32_t beep = 0U; beep < 2U; beep++)
+  {
+for (uint32_t cycle = 0U; cycle < 80U; cycle++)
+{
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET);
+  (void)osDelay(1U);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_RESET);
+  (void)osDelay(1U);
+}
+
+    (void)osDelay(80U);
+  }
+
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_RESET);
+  osThreadExit();
+  /* USER CODE END StartStartupReminderTask */
 }
 
 /* USER CODE BEGIN Header_StartChassisTask */
@@ -205,13 +252,13 @@ __weak void StartLiftTask(void *argument)
 
   (void)argument;
   up_result = Up_Init();
-
   /* Infinite loop */
   for(;;)
   {
     if (up_result == HAL_OK)
     {
       Up_Run1ms();
+      Action_Run1ms();
     }
 
     next_tick += 1U;
@@ -231,16 +278,20 @@ __weak void StartCommTask(void *argument)
 {
   /* USER CODE BEGIN StartCommTask */
   (void)argument;
-  (void)Upper_Init(&UPPER_UART_HANDLE);
-  (void)DT35Link_Init(&DT35_UART_HANDLE);
-  Xiaodianji_Init();   /* DT35 双激光测距(地址 0x40/0x41) */
+  (void)ComputerLink_Init(&huart4);
+  (void)DT35PnpLink_Init(&huart9);
+  (void)LoraLink_Init(&huart7);
+  (void)McuLink_Init(&huart6);
 
   /* Infinite loop */
   for(;;)
   {
-    Upper_Run();
-    DT35Link_Run();
-    Xiaodianji_Run();                          /* 激光在线/超时维护 */
+    DT35PnpLink_Run();
+    LoraLink_Run();
+    McuLink_Run();
+    Action_UpdatePnp(pnp_link[SENSOR_LINK_F_INDEX].trigger,
+                     pnp_link[SENSOR_LINK_L_B_INDEX].trigger);
+    ComputerLink_Run();
     osDelay(1);
   }
   /* USER CODE END StartCommTask */

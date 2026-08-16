@@ -10,6 +10,7 @@
       <TargetName>b-up</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
+      <pArmCC>6180000::V6.18::ARMCLANG</pArmCC>
       <pCCUsed>6180000::V6.18::ARMCLANG</pCCUsed>
       <uAC6>1</uAC6>
       <TargetOption>
@@ -81,7 +82,7 @@
           </BeforeMake>
           <AfterMake>
             <RunUserProg1>0</RunUserProg1>
-            <RunUserProg2>0</RunUserProg2>
+            <RunUserProg2>1</RunUserProg2>
             <UserProg1Name></UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
@@ -340,7 +341,7 @@
               <MiscControls></MiscControls>
               <Define>USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H723xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../user/up;../user/2006;../user/chassis_vesc;../user/imu;../user/upper;../user/laser;../user/w25q128;../user/flash_params;../user/xiaodianji;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
+              <IncludePath>../Core/Inc;../user/up;../user/Action_api;../user/2006;../user/chassis_vesc;../user/imu;../user/com_link;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1353,7 +1354,6 @@
             </File>
           </Files>
         </Group>
-
         <Group>
           <GroupName>Application/User/up</GroupName>
           <Files>
@@ -1439,7 +1439,21 @@
             </File>
           </Files>
         </Group>
-
+        <Group>
+          <GroupName>Application/User/Action_api</GroupName>
+          <Files>
+            <File>
+              <FileName>action_api.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/Action_api/action_api.c</FilePath>
+            </File>
+            <File>
+              <FileName>action_api.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/Action_api/action_api.h</FilePath>
+            </File>
+          </Files>
+        </Group>
         <Group>
           <GroupName>Application/User/2006</GroupName>
           <Files>
@@ -1491,6 +1505,51 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Application/User/com_link</GroupName>
+          <Files>
+            <File>
+              <FileName>computer_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/com_link/computer_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>computer_link.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/com_link/computer_link.h</FilePath>
+            </File>
+            <File>
+              <FileName>dt35_pnp_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/com_link/dt35_pnp_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>dt35_pnp_link.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/com_link/dt35_pnp_link.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/com_link/lora_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_link.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/com_link/lora_link.h</FilePath>
+            </File>
+            <File>
+              <FileName>mcu_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../user/com_link/mcu_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>mcu_link.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../user/com_link/mcu_link.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Application/User/imu</GroupName>
           <Files>
             <File>
@@ -1504,16 +1563,6 @@
               <FilePath>../user/imu/imu.h</FilePath>
             </File>
             <File>
-              <FileName>imu_algo.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/imu/imu_algo.c</FilePath>
-            </File>
-            <File>
-              <FileName>imu_algo.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/imu/imu_algo.h</FilePath>
-            </File>
-            <File>
               <FileName>imu_main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../user/imu/imu_main.c</FilePath>
@@ -1522,71 +1571,6 @@
               <FileName>imu_main.h</FileName>
               <FileType>5</FileType>
               <FilePath>../user/imu/imu_main.h</FilePath>
-            </File>
-            <File>
-              <FileName>imu_fusion.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/imu/imu_fusion.c</FilePath>
-            </File>
-            <File>
-              <FileName>imu_fusion.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/imu/imu_fusion.h</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Application/User/upper</GroupName>
-          <Files>
-            <File>
-              <FileName>upper_protocol.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/upper/upper_protocol.c</FilePath>
-            <File>
-              <FileName>upper_hooks.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/upper/upper_hooks.c</FilePath>
-            </File>
-            </File>
-            <File>
-              <FileName>upper_protocol.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/upper/upper_protocol.h</FilePath>
-            </File>
-            <File>
-              <FileName>dt35_link.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/laser/dt35_link.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Application/User/w25q128</GroupName>
-          <Files>
-            <File>
-              <FileName>w25q128.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/w25q128/w25q128.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Application/User/flash_params</GroupName>
-          <Files>
-            <File>
-              <FileName>flash_params.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/flash_params/flash_params.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Application/User/xiaodianji</GroupName>
-          <Files>
-            <File>
-              <FileName>xiaodianji_link.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/xiaodianji/xiaodianji_link.c</FilePath>
             </File>
           </Files>
         </Group>

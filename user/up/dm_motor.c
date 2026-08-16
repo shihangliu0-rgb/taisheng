@@ -4,14 +4,15 @@
 #include <stddef.h>
 #include <string.h>
 
+/* DM 电机 CAN 指令编码。 */
 #define DM_STD_ID_MAX      0x7FFU
 #define DM_FEEDBACK_ID_MAX 0x0FU
 #define DM_SPECIAL_DATA    0xFFU
 #define DM_CMD_ENABLE      0xFCU
 #define DM_CMD_DISABLE     0xFDU
 #define DM_CMD_ZERO        0xFEU
-#define DM_POSITION_BITS   16U      // 位置用16位表示
-#define DM_PARAMETER_BITS  12U      // 速度/力矩/KP/KD用12位表示
+#define DM_POSITION_BITS   16U
+#define DM_PARAMETER_BITS  12U
 
 
 static bool valid_float(float value)
@@ -75,8 +76,8 @@ static dm_result_t build_special_frame(const dm_motor_t *motor, uint8_t command,
         return result;
     }
 
-    memset(frame->data, DM_SPECIAL_DATA, 7U);   // 前7字节填0xFF
-    frame->data[7] = command;                   // 第8字节填命令码
+    memset(frame->data, DM_SPECIAL_DATA, 7U);   /* 前 7 字节填 0xFF。 */
+    frame->data[7] = command;                   /* 第 8 字节填命令码。 */
     return DM_OK;
 }
 
@@ -185,10 +186,10 @@ dm_result_t DmMotor_BuildMit(const dm_motor_t *motor, const dm_mit_cmd_t *cmd,
 bool DmMotor_Parse(dm_motor_t *motor, uint16_t id, const uint8_t *data,
                    uint8_t length, uint32_t tick_ms)
 {
+    uint8_t operating_state;
     uint16_t position;
     uint16_t velocity;
     uint16_t torque;
-    uint32_t seq;
 
     if ((motor == NULL) || (data == NULL) || (length != 8U) ||
         (id != motor->master_id) ||
@@ -197,13 +198,11 @@ bool DmMotor_Parse(dm_motor_t *motor, uint16_t id, const uint8_t *data,
         return false;
     }
 
+    operating_state = data[0] >> 4;
     position = (uint16_t)(((uint16_t)data[1] << 8) | data[2]);
     velocity = (uint16_t)(((uint16_t)data[3] << 4) | (data[4] >> 4));
     torque = (uint16_t)((((uint16_t)data[4] & 0x0FU) << 8) | data[5]);
 
-    // 奇数序号表示正在写入，偶数序号表示反馈完整。
-    seq = motor->state_seq;
-    motor->state_seq = seq + 1U;
     motor->state.position_rad =
         uint_to_float(position, -motor->limits.position_rad,
                       motor->limits.position_rad, DM_POSITION_BITS);
@@ -213,40 +212,30 @@ bool DmMotor_Parse(dm_motor_t *motor, uint16_t id, const uint8_t *data,
     motor->state.torque_nm =
         uint_to_float(torque, -motor->limits.torque_nm, motor->limits.torque_nm,
                       DM_PARAMETER_BITS);
-    motor->state.fault = (dm_fault_t)(data[0] >> 4);
+    motor->state.operating_state = operating_state;
+    if ((operating_state >= (uint8_t)DM_FAULT_OVER_VOLTAGE) &&
+        (operating_state <= (uint8_t)DM_FAULT_OVERLOAD))
+    {
+        motor->state.fault = (dm_fault_t)operating_state;
+    }
+    else
+    {
+        motor->state.fault = DM_FAULT_NONE;
+    }
     motor->state.mos_temp_c = data[6];
     motor->state.rotor_temp_c = data[7];
     motor->state.rx_tick_ms = tick_ms;
     motor->state.rx_count++;
-    motor->state_seq = seq + 2U;
     return true;
 }
 
 bool DmMotor_GetState(const dm_motor_t *motor, dm_state_t *state)
 {
-    uint32_t before;
-    uint32_t after;
-
     if ((motor == NULL) || (state == NULL))
     {
         return false;
     }
 
-    // 若读取期间收到新反馈，则重新复制一次完整快照。
-    for (;;)
-    {
-        before = motor->state_seq;
-        if ((before & 1U) != 0U)
-        {
-            continue;
-        }
-        *state = motor->state;
-        after = motor->state_seq;
-        if (before == after)
-        {
-            break;
-        }
-    }
-
+    *state = motor->state;
     return state->rx_count != 0U;
 }

@@ -3,10 +3,11 @@
 #include <limits.h>
 #include <stddef.h>
 
+/* VESC 数据包类型和电流换算比例。 */
 #define VESC_PACKET_SET_BRAKE 2U
 #define VESC_PACKET_SET_RPM   3U
 #define VESC_PACKET_STATUS    9U
-#define VESC_CURRENT_SCALE    1000.0f
+
 
 static void put_be32(uint8_t *data, int32_t value)
 {
@@ -142,7 +143,7 @@ HAL_StatusTypeDef VescMotor_Brake(vesc_motor_t *motor)
 
     motor->status.target_rpm = 0;
     brake_ma = (int32_t)(motor->config.brake_current_a *
-                         VESC_CURRENT_SCALE);
+                         1000.0f);
     put_be32(data, brake_ma);
     return VescCan_Send(motor->bus, motor->config.id,
                         VESC_PACKET_SET_BRAKE, data, sizeof(data));

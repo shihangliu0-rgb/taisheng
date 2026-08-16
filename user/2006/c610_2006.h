@@ -6,9 +6,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define C610_MAX_MOTORS         8U
-#define C610_FEEDBACK_ID_BASE   0x201U
-#define C610_CONTROL_PERIOD_MS  2U
+/* C610 总线容量和反馈 ID 布局。 */
+#define C610_MAX_MOTORS        8U
+#define C610_FEEDBACK_ID_BASE  0x201U
+#define C610_CONTROL_PERIOD_MS 2U
+/* 根据电机编号计算标准 CAN 反馈 ID。 */
 #define C610_FEEDBACK_ID(id) \
     ((uint16_t)(C610_FEEDBACK_ID_BASE + (uint16_t)(id) - 1U))
 
@@ -22,9 +24,16 @@ typedef struct
 typedef struct
 {
     uint8_t id;
+    int8_t direction;
     float target_position_deg;
     m2006_pid_gains_t pid;
 } m2006_config_t;
+
+typedef enum
+{
+    M2006_CONTROL_COAST = 0U,
+    M2006_CONTROL_POSITION = 1U
+} m2006_control_mode_t;
 
 typedef struct
 {
@@ -40,6 +49,7 @@ typedef struct
 {
     m2006_pid_t pid;
     uint8_t id;
+    int8_t direction;
     uint16_t rotor_angle;
     int32_t rotor_total; // 跨编码器零点累计的转子计数
     int16_t rotor_rpm;
@@ -51,7 +61,7 @@ typedef struct
     uint32_t last_feedback_ms;
     bool feedback_seen;
     bool online;
-    bool enabled;
+    m2006_control_mode_t control_mode;
 } m2006_motor_t;
 
 typedef struct
@@ -75,6 +85,7 @@ typedef struct
     bool feedback_seen;
     bool online;
     bool enabled;
+    m2006_control_mode_t control_mode;
 } m2006_status_t;
 
 HAL_StatusTypeDef C610_Init(c610_bus_t *bus, std_can_t *can,
@@ -93,6 +104,7 @@ HAL_StatusTypeDef C610_SetPos(c610_bus_t *bus, uint8_t id,
 HAL_StatusTypeDef C610_SetPid(c610_bus_t *bus, uint8_t id,
                               m2006_pid_gains_t gains);
 void C610_Enable(c610_bus_t *bus, uint8_t id, bool enabled);
+HAL_StatusTypeDef C610_CoastAll(c610_bus_t *bus);
 void C610_StopAll(c610_bus_t *bus);
 bool C610_GetStatus(const c610_bus_t *bus, uint8_t id,
                     m2006_status_t *status);

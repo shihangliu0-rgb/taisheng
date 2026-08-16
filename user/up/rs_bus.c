@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 
+/* 环形队列掩码，队列长度必须保持为 2 的幂。 */
 #define RS_BUS_RX_QUEUE_MASK (RS_BUS_RX_QUEUE_SIZE - 1U)
 
 #if ((RS_BUS_RX_QUEUE_SIZE & RS_BUS_RX_QUEUE_MASK) != 0U)
@@ -45,7 +46,10 @@ HAL_StatusTypeDef RsBus_Init(rs_bus_t *bus, FDCAN_HandleTypeDef *device,
     if (status == HAL_OK)
     {
         status = HAL_FDCAN_ActivateNotification(
-            device, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0U);
+            device,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_ERROR_WARNING |
+                FDCAN_IT_ERROR_PASSIVE | FDCAN_IT_BUS_OFF,
+            0U);
     }
     if (status != HAL_OK)
     {
@@ -55,6 +59,67 @@ HAL_StatusTypeDef RsBus_Init(rs_bus_t *bus, FDCAN_HandleTypeDef *device,
 
     bus->ready = true;
     return HAL_OK;
+}
+
+void RsBus_HandleErrorIsr(rs_bus_t *bus, uint32_t interrupt_flags)
+{
+    if ((bus == NULL) || !bus->ready)
+    {
+        return;
+    }
+
+    if ((interrupt_flags & FDCAN_IT_BUS_OFF) != 0U)
+    {
+        bus->bus_off = true;
+    }
+}
+
+bool RsBus_BusOff(const rs_bus_t *bus)
+{
+    return (bus != NULL) && bus->bus_off;
+}
+
+HAL_StatusTypeDef RsBus_Recover(rs_bus_t *bus)
+{
+    HAL_StatusTypeDef status;
+
+    if ((bus == NULL) || !bus->ready)
+    {
+        return HAL_ERROR;
+    }
+    if (!bus->bus_off)
+    {
+        return HAL_OK;
+    }
+
+    if (bus->device->State == HAL_FDCAN_STATE_BUSY)
+    {
+        status = HAL_FDCAN_Stop(bus->device);
+        if (status != HAL_OK)
+        {
+            return status;
+        }
+    }
+    if (bus->device->State != HAL_FDCAN_STATE_READY)
+    {
+        return HAL_ERROR;
+    }
+
+    bus->rx_tail = bus->rx_head;
+    status = HAL_FDCAN_Start(bus->device);
+    if (status == HAL_OK)
+    {
+        status = HAL_FDCAN_ActivateNotification(
+            bus->device,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_ERROR_WARNING |
+                FDCAN_IT_ERROR_PASSIVE | FDCAN_IT_BUS_OFF,
+            0U);
+    }
+    if (status == HAL_OK)
+    {
+        bus->bus_off = false;
+    }
+    return status;
 }
 
 void RsBus_Stop(rs_bus_t *bus)
@@ -87,7 +152,7 @@ HAL_StatusTypeDef RsBus_Send(rs_bus_t *bus, uint32_t id,
 {
     FDCAN_TxHeaderTypeDef header = { 0 };
 
-    if ((bus == NULL) || !bus->ready || (data == NULL))
+    if ((bus == NULL) || !bus->ready || bus->bus_off || (data == NULL))
     {
         return HAL_ERROR;
     }

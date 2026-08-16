@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* 超过该时间未收到反馈则判定为离线。 */
 #define VESC_STATUS_TIMEOUT_MS 200U
 
 typedef struct
