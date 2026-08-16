@@ -41,6 +41,13 @@ typedef struct
     bool online;                   // 最近 100 ms 内两类控制数据是否都有效
     bool yaw_hold_enabled;         // 航向保持功能是否使能
     bool yaw_hold_active;          // 当前是否由航向闭环控制旋转
+    float fused_vel_x_mps;         // 编码器+惯导融合后的世界系 X 速度(m/s)
+    float fused_vel_y_mps;         // 编码器+惯导融合后的世界系 Y 速度(m/s)
+    float fused_pos_x_m;           // 融合后的世界系 X 位置(m)
+    float fused_pos_y_m;           // 融合后的世界系 Y 位置(m)
+    float encoder_weight;          // 当前编码器权重 [0, 0.5]
+    uint32_t encoder_age_ms;       // 编码器数据年龄(ms)
+    bool encoder_offline;          // 编码器是否判定掉线
     bool zupt_active;              // 当前是否处于 ZUPT 零速驻停
     bool pos_valid;                // 位置/速度解算是否已开始输出
 } imu_data_t;

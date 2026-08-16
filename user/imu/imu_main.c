@@ -2,6 +2,7 @@
 
 #include "imu.h"
 #include "imu_algo.h"   /* 自有算法：Yaw 标量卡尔曼 / 角速度自适应低通 / 错帧保护 */
+#include "imu_fusion.h" /* 编码器(VESC) + 惯导速度 延迟自适应加权融合 */
 #include "usart.h"
 
 #include <math.h>
@@ -302,6 +303,7 @@ static void reset_yaw(void)
     yaw_zero_ref_valid = false;
     /* 航向重新归零后世界系基准改变，累计位置一并清零 */
     ImuAlgo_ResetPosition(&imu_algo);
+    ImuFusion_Reset();
     imu_data.vel_world_x_mps = 0.0f;
     imu_data.vel_world_y_mps = 0.0f;
     imu_data.pos_world_x_m = 0.0f;
@@ -624,6 +626,7 @@ HAL_StatusTypeDef ImuMain_Init(void)
 
     memset(&imu_data, 0, sizeof(imu_data));
     ImuAlgo_Init(&imu_algo);   /* 初始化自有算法(卡尔曼/滤波/DWT 微秒 dt) */
+    ImuFusion_Reset();         /* 初始化编码器/惯导融合器 */
     if (Imu_Init(&huart1) != HAL_OK)
     {
         imu_data.state = IMU_STATE_ERROR;
@@ -669,6 +672,16 @@ void ImuMain_Run1ms(void)
     process_accel(&raw_data);
     update_health(now_ms, &raw_data);
     recover_stale_streams(now_ms);
+
+    /* 编码器(VESC 轮速) 与惯导速度融合，需排在 process_accel 之后 */
+    ImuFusion_Update(now_ms);
+    imu_data.fused_vel_x_mps = ImuFusion_GetVelX();
+    imu_data.fused_vel_y_mps = ImuFusion_GetVelY();
+    imu_data.fused_pos_x_m = ImuFusion_GetPosX();
+    imu_data.fused_pos_y_m = ImuFusion_GetPosY();
+    imu_data.encoder_weight = ImuFusion_GetEncoderWeight();
+    imu_data.encoder_age_ms = ImuFusion_GetEncoderAgeMs();
+    imu_data.encoder_offline = (ImuFusion_IsEncoderOffline() != 0U);
 }
 
 /**
@@ -842,6 +855,7 @@ HAL_StatusTypeDef ImuMain_ResetPosition(void)
     }
 
     ImuAlgo_ResetPosition(&imu_algo);
+    ImuFusion_ResetPosition();
     imu_data.vel_world_x_mps = 0.0f;
     imu_data.vel_world_y_mps = 0.0f;
     imu_data.pos_world_x_m = 0.0f;
