@@ -34,6 +34,17 @@
 #define M2006_PID_KI         0.0f
 #define M2006_PID_KD         4.0f
 #define MOTOR_WORK_ZERO_DEG (-UP_SECOND_ZERO_OFFSET_DEG)
+
+/* ==========================================================================
+ *  RS 左腿(ID 39) 首次标零参数 —— ★需按实车机械结构标定
+ * --------------------------------------------------------------------------
+ *  左腿首次不设零点, 保留上电原始坐标系, 直接运动到"机械参考角"后再设零点。
+ *  RS_L_MECH_REF_DEG   : 机械参考角(上电坐标系下的绝对角, deg), 到位后设为工作零点
+ *  RS_L_SAFE_MIN/MAX   : 安全机械范围, 上电实测角或目标角越界即报错不动作
+ * ========================================================================== */
+#define RS_L_MECH_REF_DEG    (-UP_SECOND_ZERO_OFFSET_DEG)
+#define RS_L_SAFE_MIN_DEG    (-180.0f)
+#define RS_L_SAFE_MAX_DEG    (180.0f)
 #define MOTOR_MOVE_TIME_MS   2000U
 #define MOTOR_DONE_ERROR_DEG 3.0f
 #define MOTOR_START_DELAY_MS 20U
@@ -182,6 +193,11 @@ up_state_t up_state = UP_STATE_INIT;
 up_zero_step_t up_zero_step = UP_ZERO_DISABLE_RS;
 float up_rs_feedforward_nm;
 float up_dm_feedforward_nm;
+
+/* RS 左腿首次标零: 上电实测角(上电坐标系) 与 本次目标角。 */
+static float rs_l_start_angle_deg;
+static float rs_l_target_angle_deg;
+static bool  rs_l_skip_first_zero;
 
 static bool finite_float(float value)
 {
@@ -399,6 +415,54 @@ static HAL_StatusTypeDef start_dm_motor(uint8_t index)
     return HAL_OK;
 }
 
+/**
+ * @brief 左腿使能后应停在的参考角
+ * @retval 跳过首次标零时为上电实测角, 否则为 0
+ */
+static float rs_l_enable_ref_deg(void)
+{
+    return rs_l_skip_first_zero ? rs_l_start_angle_deg : 0.0f;
+}
+
+/**
+ * @brief 读取 RS 左腿(ID 39)当前反馈角度
+ * @param angle_deg 输出当前角度(输出轴, deg)
+ * @retval 是否读到有效位置反馈
+ * @note  电机使能后驱动持续上报反馈帧, 此处只读取, 不额外发查询指令。
+ */
+static bool read_rs_l_angle(uint32_t now_ms, float *angle_deg)
+{
+    rs_app_status_t status;
+
+    if (angle_deg == NULL)
+    {
+        return false;
+    }
+    if (!RsApp_GetStatus(&rs_app, RS_MOTOR_L_ID, now_ms, &status))
+    {
+        return false;
+    }
+    if (!status.online || !status.has_feedback ||
+        ((status.feedback.valid & RS_FDB_POSITION) == 0U) ||
+        !finite_float(status.feedback.angle_deg))
+    {
+        return false;
+    }
+
+    *angle_deg = status.feedback.angle_deg;
+    return true;
+}
+
+/**
+ * @brief 判断角度是否落在 RS 左腿安全机械范围内
+ */
+static bool rs_l_angle_in_range(float angle_deg)
+{
+    return finite_float(angle_deg) &&
+           (angle_deg >= RS_L_SAFE_MIN_DEG) &&
+           (angle_deg <= RS_L_SAFE_MAX_DEG);
+}
+
 static bool rs_pair_ready(uint32_t now_ms)
 {
     rs_app_status_t left;
@@ -414,7 +478,9 @@ static bool rs_pair_ready(uint32_t now_ms)
            ((left.feedback.valid & RS_FDB_POSITION) != 0U) &&
            ((right.feedback.valid & RS_FDB_POSITION) != 0U) &&
            (left.feedback.fault == 0U) && (right.feedback.fault == 0U) &&
-           (abs_float(left.feedback.angle_deg) <= MOTOR_DONE_ERROR_DEG) &&
+           /* 左腿首次标零未设零点, 仍在上电坐标系, 期望角是实测起点不是 0 */
+           (abs_float(left.feedback.angle_deg - rs_l_enable_ref_deg()) <=
+            MOTOR_DONE_ERROR_DEG) &&
            (abs_float(right.feedback.angle_deg) <= MOTOR_DONE_ERROR_DEG);
 }
 
@@ -504,7 +570,11 @@ static void reset_dm_coordinates(void)
 static void start_all_motor_curve(float target_angle_deg, uint32_t now_ms)
 {
     curve_start_angles = up_command_angles;
-    up_target_angles.rs_l_deg = target_angle_deg;
+    /* 步骤 7: 左腿未设零点仍在上电坐标系, 直接运动到机械参考角(绝对角);
+     * 其余三台已设零点, 从 0 转到 target_angle_deg。 */
+    up_target_angles.rs_l_deg = rs_l_skip_first_zero
+                                    ? rs_l_target_angle_deg
+                                    : target_angle_deg;
     up_target_angles.rs_r_deg = target_angle_deg;
     up_target_angles.dm_l_deg = target_angle_deg;
     up_target_angles.dm_r_deg = target_angle_deg;
@@ -537,7 +607,10 @@ static bool all_motors_at_angle(uint32_t now_ms, float angle_deg)
            (rs_right.feedback.fault == 0U) &&
            (dm_left.feedback.fault == DM_FAULT_NONE) &&
            (dm_right.feedback.fault == DM_FAULT_NONE) &&
-           (abs_float(rs_left.feedback.angle_deg - angle_deg) <=
+           /* 步骤 8: 左腿到位判据对齐到机械参考角 */
+           (abs_float(rs_left.feedback.angle_deg -
+                      (rs_l_skip_first_zero ? rs_l_target_angle_deg
+                                            : angle_deg)) <=
             MOTOR_DONE_ERROR_DEG) &&
            (abs_float(rs_right.feedback.angle_deg - angle_deg) <=
             MOTOR_DONE_ERROR_DEG) &&
@@ -642,7 +715,22 @@ static HAL_StatusTypeDef run_zero_sequence(uint32_t now_ms)
         if (start_motor_index >= ARRAY_SIZE(rs_motor_config))
         {
             reset_rs_coordinates();
+            if (rs_l_skip_first_zero)
+            {
+                /* 左腿未设零点, 指令须对齐到上电实测角, 否则使能瞬间会突跳 */
+                up_command_angles.rs_l_deg = rs_l_start_angle_deg;
+                up_target_angles.rs_l_deg = rs_l_start_angle_deg;
+                curve_start_angles.rs_l_deg = rs_l_start_angle_deg;
+            }
             set_zero_step(UP_ZERO_SET_DM, now_ms);
+            break;
+        }
+        /* 步骤 3-6 前置: 左腿首次不设零点, 保留上电坐标系 */
+        if (rs_l_skip_first_zero && (start_motor_index == 0U))
+        {
+            start_motor_index++;
+            start_cmd_sent = false;
+            start_due_ms = now_ms + MOTOR_START_DELAY_MS;
             break;
         }
         if (!start_cmd_sent)
@@ -742,11 +830,39 @@ static HAL_StatusTypeDef run_zero_sequence(uint32_t now_ms)
         break;
 
     case UP_ZERO_WAIT_READY:
-        if (rs_pair_ready(now_ms) && dm_pair_ready(now_ms))
+        if (!rs_pair_ready(now_ms) || !dm_pair_ready(now_ms))
         {
-            return HAL_OK;
+            break;
         }
-        break;
+        if (rs_l_skip_first_zero)
+        {
+            float now_deg;
+
+            /* 步骤 3: 使能完成后读取 RS 左腿当前实际位置 */
+            if (!read_rs_l_angle(now_ms, &now_deg))
+            {
+                break;   /* 反馈还没到, 等下一周期; 超时由上层兜底 */
+            }
+            /* 步骤 4: 当前位置必须在安全机械范围内 */
+            if (!rs_l_angle_in_range(now_deg))
+            {
+                up_last_result = HAL_ERROR;
+                return HAL_ERROR;
+            }
+            /* 步骤 5: 目标 = 机械参考角(绝对角, 上电坐标系) */
+            rs_l_start_angle_deg = now_deg;
+            rs_l_target_angle_deg = RS_L_MECH_REF_DEG;
+            /* 步骤 6: 目标同样必须在安全范围内 */
+            if (!rs_l_angle_in_range(rs_l_target_angle_deg))
+            {
+                up_last_result = HAL_ERROR;
+                return HAL_ERROR;
+            }
+            /* 曲线从实测角起步, 避免第一拍指令跳变 */
+            up_command_angles.rs_l_deg = now_deg;
+            curve_start_angles.rs_l_deg = now_deg;
+        }
+        return HAL_OK;
 
     default:
         return HAL_ERROR;
@@ -794,6 +910,11 @@ static void run_motor_state(uint32_t now_ms)
         if (!up_curve_running &&
             all_motors_at_angle(now_ms, MOTOR_WORK_ZERO_DEG))
         {
+            /* 步骤 9: 清除跳过标志, 第二次标零左腿照常 SetZero, 与其余三台
+             * 统一到同一工作零点; 之后所有坐标判据恢复以 0 为基准。 */
+            rs_l_skip_first_zero = false;
+            rs_l_start_angle_deg = 0.0f;
+            rs_l_target_angle_deg = 0.0f;
             set_zero_step(UP_ZERO_DISABLE_RS, now_ms);
             up_state = UP_STATE_SECOND_ZERO;
             state_start_ms = now_ms;
@@ -1055,6 +1176,9 @@ HAL_StatusTypeDef Up_Init(void)
     up_rs_feedforward_nm = 0.0f;
     up_dm_feedforward_nm = 0.0f;
     rebase_state = UP_REBASE_IDLE;
+    rs_l_skip_first_zero = true;   /* 左腿走"读角度->运动到机械参考角->设零点" */
+    rs_l_start_angle_deg = 0.0f;
+    rs_l_target_angle_deg = 0.0f;
     up_state = UP_STATE_FIRST_ZERO;
     state_start_ms = HAL_GetTick();
     set_zero_step(UP_ZERO_DISABLE_RS, state_start_ms);
@@ -1071,6 +1195,9 @@ HAL_StatusTypeDef Up_HomeMotors(void)
     }
 
     stop_outputs();
+    rs_l_skip_first_zero = true;
+    rs_l_start_angle_deg = 0.0f;
+    rs_l_target_angle_deg = 0.0f;
     reset_rs_coordinates();
     reset_dm_coordinates();
     up_state = UP_STATE_FIRST_ZERO;
