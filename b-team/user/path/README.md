@@ -1,7 +1,8 @@
 # DT35 全局路径
 
 不用 IMU。等前/左 DT35 有数据后，用左光判镜像，按激光阈值跑 4 段。
-速度直接 `Chassis_SetVelocity(±150)`，轮速闭环在 VESC，路径层不再套 PID。
+自动速度按到目标的剩余厘米做 PID：远了顶满 150，近了减速。
+轮速闭环仍在 VESC。`PATH_PID_KP/KI/KD` 在 `path.h`。
 
 ## 怎么跑
 
