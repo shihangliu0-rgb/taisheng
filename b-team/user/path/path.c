@@ -68,10 +68,11 @@ static void Path_UpdateLaserData(void)
 
     primask = __get_PRIMASK();
     __disable_irq();
-    front_cm = dt35_link[SENSOR_LINK_F_INDEX].distance_cm;
-    left_cm = dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm;
-    front_online = dt35_link[SENSOR_LINK_F_INDEX].online != 0U;
-    left_online = dt35_link[SENSOR_LINK_L_B_INDEX].online != 0U;
+    /* 链路上 F/L 通道和车上前/左装反，这里对调后当语义前/左用。 */
+    front_cm = dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm;
+    left_cm = dt35_link[SENSOR_LINK_F_INDEX].distance_cm;
+    front_online = dt35_link[SENSOR_LINK_L_B_INDEX].online != 0U;
+    left_online = dt35_link[SENSOR_LINK_F_INDEX].online != 0U;
     if (primask == 0U)
     {
         __enable_irq();
