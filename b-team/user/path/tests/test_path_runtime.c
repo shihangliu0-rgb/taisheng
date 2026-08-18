@@ -49,9 +49,8 @@ static void set_laser(uint8_t index, uint16_t distance_cm, bool online)
 
 static void set_both(uint16_t front_cm, uint16_t left_cm)
 {
-    /* 与 path.c 一样：链路 F/L 和语义前/左对调。 */
-    set_laser(SENSOR_LINK_L_B_INDEX, front_cm, true);
-    set_laser(SENSOR_LINK_F_INDEX, left_cm, true);
+    set_laser(SENSOR_LINK_F_INDEX, front_cm, true);
+    set_laser(SENSOR_LINK_L_B_INDEX, left_cm, true);
 }
 
 static void reset_mocks(void)

@@ -111,6 +111,12 @@ static void Link_StoreFrame(void)
 
     if (sensor_parser.frame[0] == DT35_FRAME_HEADER)
     {
+        /*
+         * 车上前/左 DT35 串口地址对调：0x40 实际是左光，0x41 实际是前光。
+         * 只在主控收包时互换，不改传感器子板。
+         */
+        index = (index == SENSOR_LINK_F_INDEX) ?
+                SENSOR_LINK_L_B_INDEX : SENSOR_LINK_F_INDEX;
         dt35_link[index].distance_cm = value;
         dt35_link[index].last_rx_ms = now_ms;
         dt35_link[index].online = 1U;
