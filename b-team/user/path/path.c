@@ -243,39 +243,45 @@ static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
     {
     case 0U:
     case 2U:
-        *vy = PATH_AUTO_FAST_COMMAND;
+        /* 前光离线或已到 26 cm：不准再前进。 */
+        if (path_diagnostics.front_laser_online &&
+            (path_diagnostics.front_distance_cm > PATH_FRONT_ARRIVE_CM))
+        {
+            *vy = PATH_AUTO_FAST_COMMAND;
+        }
         break;
     case 1U:
-        *vx = mirrored ? (int16_t)-PATH_AUTO_FAST_COMMAND
-                       : PATH_AUTO_FAST_COMMAND;
+        if (mirrored)
+        {
+            if (path_diagnostics.left_laser_online &&
+                (path_diagnostics.left_distance_cm > PATH_LEFT_NEAR_CM))
+            {
+                *vx = (int16_t)-PATH_AUTO_FAST_COMMAND;
+            }
+        }
+        else if (path_diagnostics.left_laser_online &&
+                 (path_diagnostics.left_distance_cm < PATH_LEFT_FAR_CM))
+        {
+            *vx = PATH_AUTO_FAST_COMMAND;
+        }
         break;
     case 3U:
-        *vx = mirrored ? PATH_AUTO_FAST_COMMAND
-                       : (int16_t)-PATH_AUTO_FAST_COMMAND;
+        if (mirrored)
+        {
+            if (path_diagnostics.left_laser_online &&
+                (path_diagnostics.left_distance_cm < PATH_LEFT_FAR_CM))
+            {
+                *vx = PATH_AUTO_FAST_COMMAND;
+            }
+        }
+        else if (path_diagnostics.left_laser_online &&
+                 (path_diagnostics.left_distance_cm > PATH_LEFT_NEAR_CM))
+        {
+            *vx = (int16_t)-PATH_AUTO_FAST_COMMAND;
+        }
         break;
     default:
         break;
-    }
-
-    /* 朝传感器走到阈值就不要再给速度，避免一直 150 撞墙。 */
-    if (path_diagnostics.front_laser_online &&
-        (path_diagnostics.front_distance_cm <= PATH_FRONT_ARRIVE_CM) &&
-        (*vy > 0))
-    {
-        *vy = 0;
-    }
-    if (path_diagnostics.left_laser_online)
-    {
-        if ((*vx < 0) &&
-            (path_diagnostics.left_distance_cm <= PATH_LEFT_NEAR_CM))
-        {
-            *vx = 0;
-        }
-        if ((*vx > 0) &&
-            (path_diagnostics.left_distance_cm >= PATH_LEFT_FAR_CM))
-        {
-            *vx = 0;
-        }
     }
 }
 
