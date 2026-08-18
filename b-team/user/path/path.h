@@ -12,8 +12,8 @@ extern "C" {
 
 /*
  * DT35 全局路径：不用 IMU。上电等激光有数据，用左光判镜像，
- * 按前光/左光阈值走 4 段。自动速度由「到目标的剩余厘米」做 PID：
- * 远了顶满 150，近了减速。轮速闭环仍在 VESC。
+ * 再载入该场地在本头文件里的那一套宏。自动速度由「到目标的
+ * 剩余厘米」做 PID：远了顶满 150，近了减速。轮速闭环仍在 VESC。
  *
  * 遥控器六键 payload[4] 低 6 位：
  *   按键 3：自动启动接口（PATH_AUTO_START_ON_BUTTON=1 时必用）
@@ -31,26 +31,37 @@ extern "C" {
 #define PATH_AUTO_START_DELAY_MS      5000U
 
 #define PATH_LASER_MIN_CM             5U
-#define PATH_LASER_STOP_CM            10U
 #define PATH_FRONT_LASER_MAX_CM       140U
 #define PATH_LEFT_LASER_MAX_CM        240U
-
-/* 前光从初始值降到该值：当前前进段到点。 */
-#define PATH_FRONT_ARRIVE_CM          26U
-/* 左平移：左光减到该值到点。 */
-#define PATH_LEFT_NEAR_CM             32U
-/* 右平移：左光增到该值到点。 */
-#define PATH_LEFT_FAR_CM              222U
 /* 启动时左光 >= 该值判镜像（贴东墙、左光朝西看空地）。 */
 #define PATH_MIRROR_LEFT_CM           100U
 
 #define PATH_DT35_SEGMENT_COUNT       4U
+#define PATH_PID_DT_S                 0.001f
+
+/* ========== 常规场地（左光 < PATH_MIRROR_LEFT_CM）========== */
+#define PATH_FRONT_ARRIVE_CM          26U
+#define PATH_LEFT_NEAR_CM             32U
+#define PATH_LEFT_FAR_CM              222U
+#define PATH_LASER_STOP_CM            10U
 #define PATH_AUTO_FAST_COMMAND        150
+#define PATH_AUTO_SETTLE_MS           400U
 #define PATH_PID_KP                   4.0f
 #define PATH_PID_KI                   1.2f
 #define PATH_PID_KD                   0.05f
 #define PATH_PID_I_LIMIT              30.0f
-#define PATH_PID_DT_S                 0.001f
+
+/* ========== 镜像场地（左光 >= PATH_MIRROR_LEFT_CM）========== */
+#define PATH_MIRROR_FRONT_ARRIVE_CM   26U
+#define PATH_MIRROR_LEFT_NEAR_CM      32U
+#define PATH_MIRROR_LEFT_FAR_CM       222U
+#define PATH_MIRROR_LASER_STOP_CM     10U
+#define PATH_MIRROR_FAST_COMMAND      150
+#define PATH_MIRROR_SETTLE_MS         400U
+#define PATH_MIRROR_PID_KP            4.0f
+#define PATH_MIRROR_PID_KI            1.2f
+#define PATH_MIRROR_PID_KD            0.05f
+#define PATH_MIRROR_PID_I_LIMIT       30.0f
 
 #define PATH_AUTO_STATE_WAIT          0U
 #define PATH_AUTO_STATE_READY_WAIT    1U

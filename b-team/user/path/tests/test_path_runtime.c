@@ -159,6 +159,7 @@ static void test_mirrored_dt35_route(void)
     Path_Run1ms(100U);
     assert(Path_GetDiagnostics(&diagnostics));
     assert(diagnostics.map_mirrored);
+    assert(diagnostics.segment_count == 4U);
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
     assert(mock_chassis_vy == 150);
 

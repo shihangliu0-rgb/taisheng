@@ -9,7 +9,6 @@
 #define PATH_REMOTE_TIMEOUT_MS          200U
 #define PATH_AUTO_TAKEOVER_COMMAND      10
 #define PATH_AUTO_BEEP_MS               160U
-#define PATH_AUTO_SETTLE_MS             400U
 
 typedef struct
 {
@@ -52,6 +51,50 @@ static volatile uint16_t path_beep_counter_ms;
 static bool path_handover;
 static path_pid_t path_pid;
 
+static uint16_t path_front_arrive_cm;
+static uint16_t path_left_near_cm;
+static uint16_t path_left_far_cm;
+static uint16_t path_laser_stop_cm;
+static uint16_t path_settle_ms;
+static int16_t path_fast_command;
+static float path_pid_kp;
+static float path_pid_ki;
+static float path_pid_kd;
+static float path_pid_i_limit;
+
+static void Path_LoadFieldConfig(bool mirrored)
+{
+    PathMap_SetMirrored(mirrored);
+    path_diagnostics.map_mirrored = mirrored;
+
+    if (mirrored)
+    {
+        path_front_arrive_cm = PATH_MIRROR_FRONT_ARRIVE_CM;
+        path_left_near_cm = PATH_MIRROR_LEFT_NEAR_CM;
+        path_left_far_cm = PATH_MIRROR_LEFT_FAR_CM;
+        path_laser_stop_cm = PATH_MIRROR_LASER_STOP_CM;
+        path_settle_ms = PATH_MIRROR_SETTLE_MS;
+        path_fast_command = PATH_MIRROR_FAST_COMMAND;
+        path_pid_kp = PATH_MIRROR_PID_KP;
+        path_pid_ki = PATH_MIRROR_PID_KI;
+        path_pid_kd = PATH_MIRROR_PID_KD;
+        path_pid_i_limit = PATH_MIRROR_PID_I_LIMIT;
+    }
+    else
+    {
+        path_front_arrive_cm = PATH_FRONT_ARRIVE_CM;
+        path_left_near_cm = PATH_LEFT_NEAR_CM;
+        path_left_far_cm = PATH_LEFT_FAR_CM;
+        path_laser_stop_cm = PATH_LASER_STOP_CM;
+        path_settle_ms = PATH_AUTO_SETTLE_MS;
+        path_fast_command = PATH_AUTO_FAST_COMMAND;
+        path_pid_kp = PATH_PID_KP;
+        path_pid_ki = PATH_PID_KI;
+        path_pid_kd = PATH_PID_KD;
+        path_pid_i_limit = PATH_PID_I_LIMIT;
+    }
+}
+
 static uint16_t Path_ClampLaserCm(uint16_t distance_cm, uint16_t max_cm)
 {
     if (distance_cm < PATH_LASER_MIN_CM)
@@ -92,10 +135,10 @@ static void Path_UpdateLaserData(void)
         Path_ClampLaserCm(left_cm, PATH_LEFT_LASER_MAX_CM);
     path_diagnostics.front_hard_blocked =
         front_online &&
-        (path_diagnostics.front_distance_cm < PATH_LASER_STOP_CM);
+        (path_diagnostics.front_distance_cm < path_laser_stop_cm);
     path_diagnostics.left_hard_blocked =
         left_online &&
-        (path_diagnostics.left_distance_cm < PATH_LASER_STOP_CM);
+        (path_diagnostics.left_distance_cm < path_laser_stop_cm);
 }
 
 static void Path_ApplyGlobalLaserLimit(int16_t *vx, int16_t *vy)
@@ -121,8 +164,7 @@ static void Path_DetectFieldSide(void)
     }
 
     mirrored = (path_diagnostics.left_distance_cm >= PATH_MIRROR_LEFT_CM);
-    PathMap_SetMirrored(mirrored);
-    path_diagnostics.map_mirrored = mirrored;
+    Path_LoadFieldConfig(mirrored);
     path_diagnostics.left_initial_distance_m =
         (float)path_diagnostics.left_distance_cm * 0.01f;
     path_diagnostics.front_initial_distance_m =
@@ -173,12 +215,12 @@ static float Path_PidRun(float error_cm)
     }
 
     path_pid.integral = Path_ClampSymmetric(
-        path_pid.integral + PATH_PID_KI * error_cm * PATH_PID_DT_S,
-        PATH_PID_I_LIMIT);
+        path_pid.integral + path_pid_ki * error_cm * PATH_PID_DT_S,
+        path_pid_i_limit);
     path_pid.last_error = error_cm;
-    output = PATH_PID_KP * error_cm + path_pid.integral +
-             PATH_PID_KD * derivative;
-    output = Path_ClampSymmetric(output, (float)PATH_AUTO_FAST_COMMAND);
+    output = path_pid_kp * error_cm + path_pid.integral +
+             path_pid_kd * derivative;
+    output = Path_ClampSymmetric(output, (float)path_fast_command);
     path_diagnostics.pid_error_cm = error_cm;
     path_diagnostics.pid_output = output;
     return output;
@@ -290,19 +332,19 @@ static bool Path_SegmentArrived(void)
     {
     case 0U:
     case 2U:
-        return front_ok && (front_cm <= PATH_FRONT_ARRIVE_CM);
+        return front_ok && (front_cm <= path_front_arrive_cm);
     case 1U:
         if (mirrored)
         {
-            return left_ok && (left_cm <= PATH_LEFT_NEAR_CM);
+            return left_ok && (left_cm <= path_left_near_cm);
         }
-        return left_ok && (left_cm >= PATH_LEFT_FAR_CM);
+        return left_ok && (left_cm >= path_left_far_cm);
     case 3U:
         if (mirrored)
         {
-            return left_ok && (left_cm >= PATH_LEFT_FAR_CM);
+            return left_ok && (left_cm >= path_left_far_cm);
         }
-        return left_ok && (left_cm <= PATH_LEFT_NEAR_CM);
+        return left_ok && (left_cm <= path_left_near_cm);
     default:
         return false;
     }
@@ -327,7 +369,7 @@ static bool Path_GetRemainingCm(float *remaining_cm,
         {
             return false;
         }
-        *remaining_cm = (float)front_cm - (float)PATH_FRONT_ARRIVE_CM;
+        *remaining_cm = (float)front_cm - (float)path_front_arrive_cm;
         *dir_y = 1;
         return true;
     case 1U:
@@ -337,12 +379,12 @@ static bool Path_GetRemainingCm(float *remaining_cm,
         }
         if (mirrored)
         {
-            *remaining_cm = (float)left_cm - (float)PATH_LEFT_NEAR_CM;
+            *remaining_cm = (float)left_cm - (float)path_left_near_cm;
             *dir_x = -1;
         }
         else
         {
-            *remaining_cm = (float)PATH_LEFT_FAR_CM - (float)left_cm;
+            *remaining_cm = (float)path_left_far_cm - (float)left_cm;
             *dir_x = 1;
         }
         return true;
@@ -353,12 +395,12 @@ static bool Path_GetRemainingCm(float *remaining_cm,
         }
         if (mirrored)
         {
-            *remaining_cm = (float)PATH_LEFT_FAR_CM - (float)left_cm;
+            *remaining_cm = (float)path_left_far_cm - (float)left_cm;
             *dir_x = 1;
         }
         else
         {
-            *remaining_cm = (float)left_cm - (float)PATH_LEFT_NEAR_CM;
+            *remaining_cm = (float)left_cm - (float)path_left_near_cm;
             *dir_x = -1;
         }
         return true;
@@ -442,7 +484,7 @@ static bool Path_AutoUpdate(uint32_t now_ms,
         }
         state = PATH_AUTO_STATE_DRIVE;
         path_auto_last_segment = path_diagnostics.segment_index;
-        path_auto_segment_change_ms = now_ms - PATH_AUTO_SETTLE_MS;
+        path_auto_segment_change_ms = now_ms - path_settle_ms;
         Path_PidReset();
     }
 
@@ -462,7 +504,7 @@ static bool Path_AutoUpdate(uint32_t now_ms,
             return true;
         }
         if ((uint32_t)(now_ms - path_auto_segment_change_ms) <
-            PATH_AUTO_SETTLE_MS)
+            path_settle_ms)
         {
             path_diagnostics.auto_state = state;
             return true;
@@ -543,7 +585,7 @@ void Path_Init(void)
     path_auto_segment_change_ms = 0U;
     path_beep_counter_ms = 0U;
     path_handover = false;
-    PathMap_SetMirrored(false);
+    Path_LoadFieldConfig(false);
 
     Path_PidReset();
     path_diagnostics.initialized = true;
