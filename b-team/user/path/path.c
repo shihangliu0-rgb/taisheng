@@ -92,9 +92,8 @@ static void Path_UpdateLaserData(void)
     path_diagnostics.left_distance_cm =
         Path_ClampLaserCm(left_cm, PATH_LEFT_LASER_MAX_CM);
     /*
-     * 只做近距硬停：在线且 < 10 cm 立即刹整车。
-     * 0 按无回波处理，钳到 5 cm，因此也会停。
-     * 离线不停车，也不改自动状态。
+     * 近距标志：在线且 < 10 cm。0 钳到 5 cm，因此也算近。
+     * 离线不算阻挡。真正处理在自动段推进 / 遥控轴向限制里。
      */
     path_diagnostics.front_hard_blocked =
         front_online &&
@@ -102,6 +101,32 @@ static void Path_UpdateLaserData(void)
     path_diagnostics.left_hard_blocked =
         left_online &&
         (path_diagnostics.left_distance_cm < PATH_LASER_STOP_CM);
+}
+
+static bool Path_LaserBlocksCommand(int16_t vx, int16_t vy)
+{
+    return (path_diagnostics.front_hard_blocked && (vy > 0)) ||
+           (path_diagnostics.left_hard_blocked && (vx < 0));
+}
+
+static void Path_AdvanceSegmentAsReached(uint32_t now_ms)
+{
+    uint8_t route_count;
+    const path_map_route_segment_t *route = PathMap_GetRoute(&route_count);
+
+    if (path_diagnostics.segment_index < route_count)
+    {
+        path_diagnostics.segment_index++;
+    }
+    path_diagnostics.route_complete =
+        path_diagnostics.segment_index >= route_count;
+    path_auto_last_segment = path_diagnostics.segment_index;
+    path_auto_segment_change_ms = now_ms;
+    if (!path_diagnostics.route_complete)
+    {
+        path_diagnostics.active_axis =
+            route[path_diagnostics.segment_index].axis;
+    }
 }
 
 static int16_t Path_AbsCommand(int16_t value)
@@ -381,6 +406,28 @@ static bool Path_AutoUpdate(uint32_t now_ms,
             {
                 *auto_vy = (int16_t)(segment->direction * speed);
             }
+            /*
+             * 朝前光/+Y 或左光/-X 走到 < 10 cm：当前段当作到点，
+             * 刹住后进 400 ms 滑停，再平移下一段。不是卡死等距离恢复。
+             */
+            if (Path_LaserBlocksCommand(*auto_vx, *auto_vy))
+            {
+                Path_AdvanceSegmentAsReached(now_ms);
+                *auto_vx = 0;
+                *auto_vy = 0;
+                *force_stop = true;
+                if (path_diagnostics.route_complete)
+                {
+                    path_beep_counter_ms = PATH_AUTO_BEEP_MS;
+                    path_diagnostics.auto_state = PATH_AUTO_STATE_DONE;
+                    path_handover = true;
+                }
+                else
+                {
+                    path_diagnostics.auto_state = state;
+                }
+                return true;
+            }
         }
     }
 
@@ -500,7 +547,7 @@ void Path_Run1ms(uint32_t now_ms)
     int16_t auto_vx;
     int16_t auto_vy;
     bool auto_stop = false;
-    bool laser_stop;
+    bool auto_active;
     uint32_t primask;
 
     if (!path_diagnostics.initialized)
@@ -546,17 +593,23 @@ void Path_Run1ms(uint32_t now_ms)
     vy = remote.vy;
     vz = (path_handover && remote.online) ? remote.vz : 0;
 
-    if (Path_AutoUpdate(now_ms, &remote, &auto_vx, &auto_vy, &auto_stop))
+    auto_active = Path_AutoUpdate(now_ms, &remote, &auto_vx, &auto_vy,
+                                  &auto_stop);
+    if (auto_active)
     {
         vx = auto_vx;
         vy = auto_vy;
     }
-
-    laser_stop = path_diagnostics.front_hard_blocked ||
-                 path_diagnostics.left_hard_blocked;
-    if (laser_stop)
+    else
     {
-        auto_stop = true;
+        if (path_diagnostics.front_hard_blocked && (vy > 0))
+        {
+            vy = 0;
+        }
+        if (path_diagnostics.left_hard_blocked && (vx < 0))
+        {
+            vx = 0;
+        }
     }
 
     primask = __get_PRIMASK();
