@@ -9,6 +9,10 @@ typedef struct
 {
     float encoder_body_velocity_x_mps;
     float encoder_body_velocity_y_mps;
+    float imu_velocity_x_mps;
+    float imu_velocity_y_mps;
+    float imu_position_x_m;
+    float imu_position_y_m;
     float fused_velocity_x_mps;
     float fused_velocity_y_mps;
     float fused_position_x_m;

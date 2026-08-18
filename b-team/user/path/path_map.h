@@ -15,6 +15,9 @@ extern "C" {
 #define PATH_MAP_ROBOT_LENGTH_M         0.6170f
 #define PATH_MAP_ROBOT_WIDTH_M          0.4400f
 #define PATH_MAP_INITIAL_CENTER_Y_M     (0.5f * PATH_MAP_ROBOT_LENGTH_M)
+/* 上电假定摆位：贴西墙、左光约 10.5 cm。后续加回激光定点后再改。 */
+#define PATH_MAP_START_X_M              0.3740f
+#define PATH_MAP_START_Y_M              PATH_MAP_INITIAL_CENTER_Y_M
 #define PATH_MAP_BOUNDARY_MARGIN_X_M    0.2700f
 #define PATH_MAP_BOUNDARY_MARGIN_Y_M    0.3285f
 #define PATH_MAP_LOCK_YAW_DEG           0.0f

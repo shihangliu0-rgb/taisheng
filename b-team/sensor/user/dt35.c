@@ -13,8 +13,6 @@
 #define DT35_I2C_TIMEOUT_MS 20U
 #define DT35_VOLT_NEAR_MV   0U
 #define DT35_VOLT_FAR_MV    10000U
-#define DT35_DIST_NEAR_CM   5U
-#define DT35_DIST_FAR_CM    20U
 
 
 static I2C_HandleTypeDef *dt35_i2c;
@@ -125,11 +123,18 @@ static HAL_StatusTypeDef dt35_read_sensor(uint8_t address, dt35_data_t *data)
     raw = ((uint16_t)rx_data[0] << 8U) | rx_data[1];
     data->raw = raw;
     data->voltage_mv = (uint16_t)(((uint32_t)raw * 5U + 2U) / 4U);
-    data->distance_cm = dt35_to_distance(data->voltage_mv);
+    data->distance_cm = dt35_to_distance(data->voltage_mv,
+                                         dt35_far_cm(address));
     return HAL_OK;
 }
 
-static uint16_t dt35_to_distance(uint16_t voltage_mv)
+static uint16_t dt35_far_cm(uint8_t address)
+{
+    return (address == DT35_ADDR_L) ? DT35_DIST_LEFT_FAR_CM
+                                    : DT35_DIST_FRONT_FAR_CM;
+}
+
+static uint16_t dt35_to_distance(uint16_t voltage_mv, uint16_t far_cm)
 {
     if (voltage_mv <= DT35_VOLT_NEAR_MV)
     {
@@ -137,12 +142,12 @@ static uint16_t dt35_to_distance(uint16_t voltage_mv)
     }
     if (voltage_mv >= DT35_VOLT_FAR_MV)
     {
-        return DT35_DIST_FAR_CM;
+        return far_cm;
     }
 
     return (uint16_t)(DT35_DIST_NEAR_CM +
         ((uint32_t)(voltage_mv - DT35_VOLT_NEAR_MV) *
-         (DT35_DIST_FAR_CM - DT35_DIST_NEAR_CM)) /
+         (far_cm - DT35_DIST_NEAR_CM)) /
         (DT35_VOLT_FAR_MV - DT35_VOLT_NEAR_MV));
 }
 
