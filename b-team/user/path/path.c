@@ -195,13 +195,13 @@ static void Path_UpdateOdometryAndRoute(void)
          * 假定上电时车在固定起点，里程计从 (0,0) 积起。
          * 地图坐标 = 起点 + IMU 位移。
          */
-        path_map_origin_x_m = PATH_MAP_START_X_M -
+        path_map_origin_x_m = PATH_RUNTIME_START_X_M -
                               odometry.imu_position_x_m;
-        path_map_origin_y_m = PATH_MAP_START_Y_M -
+        path_map_origin_y_m = PATH_RUNTIME_START_Y_M -
                               odometry.imu_position_y_m;
         path_diagnostics.initial_position_valid = true;
-        path_diagnostics.initial_map_x_m = PATH_MAP_START_X_M;
-        path_diagnostics.initial_map_y_m = PATH_MAP_START_Y_M;
+        path_diagnostics.initial_map_x_m = PATH_RUNTIME_START_X_M;
+        path_diagnostics.initial_map_y_m = PATH_RUNTIME_START_Y_M;
         path_diagnostics.initial_yaw_deg = 0.0f;
     }
 
@@ -379,8 +379,8 @@ void Path_Init(void)
     path_last_output_vy = 0;
     path_last_output_z = 0;
     path_processed_remote_sequence = 0U;
-    path_map_origin_x_m = PATH_MAP_START_X_M;
-    path_map_origin_y_m = PATH_MAP_START_Y_M;
+    path_map_origin_x_m = PATH_RUNTIME_START_X_M;
+    path_map_origin_y_m = PATH_RUNTIME_START_Y_M;
     path_yaw_was_ready = false;
     path_auto_button_armed = true;
     path_auto_triggered = false;
@@ -388,14 +388,15 @@ void Path_Init(void)
     path_auto_segment_change_ms = 0U;
     path_beep_counter_ms = 0U;
     path_handover = false;
-    PathMap_SetMirrored(false);
+    PathMap_SetMirrored(PATH_USE_MIRRORED != 0);
 
     path_diagnostics.initialized = true;
+    path_diagnostics.map_mirrored = PathMap_IsMirrored();
     path_diagnostics.segment_count = PATH_MAP_ROUTE_SEGMENT_COUNT;
     path_diagnostics.active_axis = PATH_MAP_AXIS_Y;
     path_diagnostics.auto_state = PATH_AUTO_STATE_WAIT;
-    path_diagnostics.initial_map_x_m = PATH_MAP_START_X_M;
-    path_diagnostics.initial_map_y_m = PATH_MAP_START_Y_M;
+    path_diagnostics.initial_map_x_m = PATH_RUNTIME_START_X_M;
+    path_diagnostics.initial_map_y_m = PATH_RUNTIME_START_Y_M;
 }
 
 void Path_SubmitRemoteCommand(int16_t *vx, int16_t *vy, int16_t *z,

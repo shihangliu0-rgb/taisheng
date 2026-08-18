@@ -29,6 +29,21 @@ extern "C" {
 #define PATH_AUTO_START_ON_BUTTON     0
 #define PATH_AUTO_START_DELAY_MS      5000U
 
+/*
+ * 场地侧别：编译期选定，运行时不判断。
+ *   0 = 常规侧，贴西墙，起点 (0.374, 0.3085)，路线 上右上左上右
+ *   1 = 镜像侧，贴东墙，起点 (2.626, 0.3085)，路线 上左上右上左
+ */
+#ifndef PATH_USE_MIRRORED
+#define PATH_USE_MIRRORED             0
+#endif
+#if PATH_USE_MIRRORED
+#define PATH_RUNTIME_START_X_M        PATH_MAP_MIRRORED_START_X_M
+#else
+#define PATH_RUNTIME_START_X_M        PATH_MAP_START_X_M
+#endif
+#define PATH_RUNTIME_START_Y_M        PATH_MAP_START_Y_M
+
 #define PATH_AUTO_STATE_WAIT          0U
 #define PATH_AUTO_STATE_READY_WAIT    1U
 #define PATH_AUTO_STATE_DRIVE         3U

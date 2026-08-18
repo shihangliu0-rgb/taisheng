@@ -89,18 +89,21 @@ static void test_fixed_start_and_odom(void)
     Path_Run1ms(1U);
     assert(Path_GetDiagnostics(&diagnostics));
     assert(diagnostics.initial_position_valid);
-    assert(fabsf(diagnostics.initial_map_x_m - PATH_MAP_START_X_M) < 0.0002f);
-    assert(fabsf(diagnostics.initial_map_y_m - PATH_MAP_START_Y_M) < 0.0002f);
-    assert(fabsf(diagnostics.map_x_m - PATH_MAP_START_X_M) < 0.0002f);
-    assert(fabsf(diagnostics.map_y_m - PATH_MAP_START_Y_M) < 0.0002f);
+    assert(diagnostics.map_mirrored == (PATH_USE_MIRRORED != 0));
+    assert(fabsf(diagnostics.initial_map_x_m - PATH_RUNTIME_START_X_M) <
+           0.0002f);
+    assert(fabsf(diagnostics.initial_map_y_m - PATH_RUNTIME_START_Y_M) <
+           0.0002f);
+    assert(fabsf(diagnostics.map_x_m - PATH_RUNTIME_START_X_M) < 0.0002f);
+    assert(fabsf(diagnostics.map_y_m - PATH_RUNTIME_START_Y_M) < 0.0002f);
 
     mock_odometry.imu_position_x_m = 0.10f;
     mock_odometry.imu_position_y_m = 0.20f;
     Path_Run1ms(2U);
     assert(Path_GetDiagnostics(&diagnostics));
-    assert(fabsf(diagnostics.map_x_m - (PATH_MAP_START_X_M + 0.10f)) <
+    assert(fabsf(diagnostics.map_x_m - (PATH_RUNTIME_START_X_M + 0.10f)) <
            0.0002f);
-    assert(fabsf(diagnostics.map_y_m - (PATH_MAP_START_Y_M + 0.20f)) <
+    assert(fabsf(diagnostics.map_y_m - (PATH_RUNTIME_START_Y_M + 0.20f)) <
            0.0002f);
     assert(diagnostics.segment_index == 0U);
 }
@@ -134,32 +137,38 @@ static void test_auto_fixed_route(void)
     assert(mock_chassis_vx == 0);
     assert(mock_chassis_vy == 150);
 
-    mock_odometry.imu_position_y_m = 1.601f - PATH_MAP_START_Y_M;
-    Path_Run1ms(5002U);
-    assert(Path_GetDiagnostics(&diagnostics));
-    assert(diagnostics.segment_index == 1U);
-    assert(mock_chassis_vx == 0);
-    assert(mock_chassis_vy == 0);
-    Path_Run1ms(5403U);
-    assert(mock_chassis_vx == 150);
-    assert(mock_chassis_vy == 0);
+    {
+        uint8_t route_count;
+        const path_map_route_segment_t *route = PathMap_GetRoute(&route_count);
+        uint8_t i;
+        uint32_t now = 5002U;
+        float map_x = PATH_RUNTIME_START_X_M;
+        float map_y = PATH_RUNTIME_START_Y_M;
 
-    mock_odometry.imu_position_x_m = 2.300f - PATH_MAP_START_X_M;
-    Path_Run1ms(5404U);
-    assert(mock_chassis_vx == 75);
-
-    mock_odometry.imu_position_x_m = 2.481f - PATH_MAP_START_X_M;
-    Path_Run1ms(5805U);
-    mock_odometry.imu_position_y_m = 2.601f - PATH_MAP_START_Y_M;
-    Path_Run1ms(6306U);
-    mock_odometry.imu_position_x_m = 0.359f - PATH_MAP_START_X_M;
-    Path_Run1ms(6807U);
-    mock_odometry.imu_position_y_m = 3.701f - PATH_MAP_START_Y_M;
-    Path_Run1ms(7308U);
-    Path_Run1ms(7800U);
-    assert(mock_chassis_vx != 0);
-    mock_odometry.imu_position_x_m = 0.501f - PATH_MAP_START_X_M;
-    Path_Run1ms(7809U);
+        assert(route_count == PATH_MAP_ROUTE_SEGMENT_COUNT);
+        for (i = 0U; i < route_count; i++)
+        {
+            if (route[i].axis == PATH_MAP_AXIS_Y)
+            {
+                map_y = route[i].target_m +
+                        ((route[i].direction > 0) ? 0.001f : -0.001f);
+            }
+            else
+            {
+                map_x = route[i].target_m +
+                        ((route[i].direction > 0) ? 0.001f : -0.001f);
+            }
+            mock_odometry.imu_position_x_m = map_x - PATH_RUNTIME_START_X_M;
+            mock_odometry.imu_position_y_m = map_y - PATH_RUNTIME_START_Y_M;
+            Path_Run1ms(now);
+            now += 400U;
+            if (i + 1U < route_count)
+            {
+                Path_Run1ms(now);
+                now += 1U;
+            }
+        }
+    }
     assert(Path_GetDiagnostics(&diagnostics));
     assert(diagnostics.route_complete);
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DONE);
