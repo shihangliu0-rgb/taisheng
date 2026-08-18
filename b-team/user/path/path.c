@@ -2,17 +2,21 @@
 
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
-#include "imu_main.h"
 
-#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
 #define PATH_REMOTE_TIMEOUT_MS          200U
-#define PATH_AUTO_FAST_COMMAND          150
 #define PATH_AUTO_TAKEOVER_COMMAND      10
 #define PATH_AUTO_BEEP_MS               160U
 #define PATH_AUTO_SETTLE_MS             400U
+
+typedef struct
+{
+    float integral;
+    float last_error;
+    bool started;
+} path_pid_t;
 
 typedef struct
 {
@@ -39,7 +43,6 @@ static volatile int16_t path_last_output_z;
 
 static path_diagnostics_t path_diagnostics;
 static uint32_t path_processed_remote_sequence;
-static bool path_yaw_was_ready;
 static bool path_auto_button_armed;
 static bool path_auto_triggered;
 static bool path_field_detected;
@@ -48,6 +51,7 @@ static uint8_t path_auto_last_segment;
 static uint32_t path_auto_segment_change_ms;
 static volatile uint16_t path_beep_counter_ms;
 static bool path_handover;
+static path_pid_t path_pid;
 
 static uint16_t Path_ClampLaserCm(uint16_t distance_cm, uint16_t max_cm)
 {
@@ -60,6 +64,59 @@ static uint16_t Path_ClampLaserCm(uint16_t distance_cm, uint16_t max_cm)
         return max_cm;
     }
     return distance_cm;
+}
+
+static float Path_ClampSymmetric(float value, float limit)
+{
+    if (value > limit)
+    {
+        return limit;
+    }
+    if (value < -limit)
+    {
+        return -limit;
+    }
+    return value;
+}
+
+static void Path_PidReset(void)
+{
+    path_pid.integral = 0.0f;
+    path_pid.last_error = 0.0f;
+    path_pid.started = false;
+    path_diagnostics.pid_error_cm = 0.0f;
+    path_diagnostics.pid_output = 0.0f;
+}
+
+static float Path_PidRun(float error_cm)
+{
+    float derivative = 0.0f;
+    float output;
+
+    if (error_cm < 0.0f)
+    {
+        error_cm = 0.0f;
+    }
+
+    if (path_pid.started)
+    {
+        derivative = (error_cm - path_pid.last_error) / PATH_PID_DT_S;
+    }
+    else
+    {
+        path_pid.started = true;
+    }
+
+    path_pid.integral = Path_ClampSymmetric(
+        path_pid.integral + PATH_PID_KI * error_cm * PATH_PID_DT_S,
+        PATH_PID_I_LIMIT);
+    path_pid.last_error = error_cm;
+    output = PATH_PID_KP * error_cm + path_pid.integral +
+             PATH_PID_KD * derivative;
+    output = Path_ClampSymmetric(output, PATH_PID_OUT_MAX);
+    path_diagnostics.pid_error_cm = error_cm;
+    path_diagnostics.pid_output = output;
+    return output;
 }
 
 static void Path_UpdateLaserData(void)
@@ -122,21 +179,6 @@ static int16_t Path_AbsCommand(int16_t value)
         return INT16_MAX;
     }
     return (value < 0) ? (int16_t)-value : value;
-}
-
-static float Path_AngleDiffDeg(float lhs_deg, float rhs_deg)
-{
-    float diff = fmodf(lhs_deg - rhs_deg, 360.0f);
-
-    if (diff > 180.0f)
-    {
-        diff -= 360.0f;
-    }
-    else if (diff < -180.0f)
-    {
-        diff += 360.0f;
-    }
-    return diff;
 }
 
 static void Path_WriteRemoteMailbox(int16_t vx, int16_t vy, int16_t vz,
@@ -205,35 +247,6 @@ static void Path_ProcessModeButton(const path_remote_snapshot_t *remote)
     }
 }
 
-static void Path_UpdateYawZeroLock(void)
-{
-    imu_data_t imu;
-    bool assert_target;
-    bool ready = ImuMain_GetData(&imu) &&
-                 (imu.state == IMU_STATE_READY) && imu.online &&
-                 imu.yaw_valid && !isnan(imu.yaw_deg) &&
-                 !isinf(imu.yaw_deg);
-
-    assert_target = !path_yaw_was_ready || !imu.yaw_hold_enabled ||
-                    (fabsf(Path_AngleDiffDeg(imu.target_yaw_deg,
-                                             PATH_MAP_LOCK_YAW_DEG)) >
-                     0.5f);
-    if (path_handover)
-    {
-        assert_target = false;
-    }
-    if (ready && assert_target)
-    {
-        ImuMain_EnableYawHold(true);
-        if (ImuMain_SetTargetYaw(PATH_MAP_LOCK_YAW_DEG) != HAL_OK)
-        {
-            ready = false;
-        }
-    }
-    path_yaw_was_ready = ready;
-    path_diagnostics.yaw_zero_lock_ready = ready;
-}
-
 static void Path_AdvanceSegment(uint32_t now_ms)
 {
     if (path_diagnostics.segment_index < PATH_DT35_SEGMENT_COUNT)
@@ -247,6 +260,7 @@ static void Path_AdvanceSegment(uint32_t now_ms)
     path_front_armed = path_diagnostics.front_laser_online &&
                        (path_diagnostics.front_distance_cm >
                         PATH_FRONT_ARRIVE_CM);
+    Path_PidReset();
     if (!path_diagnostics.route_complete)
     {
         path_diagnostics.active_axis =
@@ -290,29 +304,83 @@ static bool Path_SegmentArrived(void)
     }
 }
 
-static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
+static bool Path_GetRemainingCm(float *remaining_cm,
+                                int8_t *dir_x, int8_t *dir_y)
 {
+    uint16_t front_cm = path_diagnostics.front_distance_cm;
+    uint16_t left_cm = path_diagnostics.left_distance_cm;
     bool mirrored = path_diagnostics.map_mirrored;
 
-    *vx = 0;
-    *vy = 0;
+    *remaining_cm = 0.0f;
+    *dir_x = 0;
+    *dir_y = 0;
+
     switch (path_diagnostics.segment_index)
     {
     case 0U:
     case 2U:
-        *vy = PATH_AUTO_FAST_COMMAND;
-        break;
+        if (!path_diagnostics.front_laser_online)
+        {
+            return false;
+        }
+        *remaining_cm = (float)front_cm - (float)PATH_FRONT_ARRIVE_CM;
+        *dir_y = 1;
+        return true;
     case 1U:
-        *vx = mirrored ? (int16_t)-PATH_AUTO_FAST_COMMAND
-                       : PATH_AUTO_FAST_COMMAND;
-        break;
+        if (!path_diagnostics.left_laser_online)
+        {
+            return false;
+        }
+        if (mirrored)
+        {
+            *remaining_cm = (float)left_cm - (float)PATH_LEFT_NEAR_CM;
+            *dir_x = -1;
+        }
+        else
+        {
+            *remaining_cm = (float)PATH_LEFT_FAR_CM - (float)left_cm;
+            *dir_x = 1;
+        }
+        return true;
     case 3U:
-        *vx = mirrored ? PATH_AUTO_FAST_COMMAND
-                       : (int16_t)-PATH_AUTO_FAST_COMMAND;
-        break;
+        if (!path_diagnostics.left_laser_online)
+        {
+            return false;
+        }
+        if (mirrored)
+        {
+            *remaining_cm = (float)PATH_LEFT_FAR_CM - (float)left_cm;
+            *dir_x = 1;
+        }
+        else
+        {
+            *remaining_cm = (float)left_cm - (float)PATH_LEFT_NEAR_CM;
+            *dir_x = -1;
+        }
+        return true;
     default:
-        break;
+        return false;
     }
+}
+
+static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
+{
+    float remaining_cm;
+    float speed;
+    int8_t dir_x;
+    int8_t dir_y;
+
+    *vx = 0;
+    *vy = 0;
+    if (!Path_GetRemainingCm(&remaining_cm, &dir_x, &dir_y))
+    {
+        Path_PidReset();
+        return;
+    }
+
+    speed = Path_PidRun(remaining_cm);
+    *vx = (int16_t)(dir_x * (int16_t)speed);
+    *vy = (int16_t)(dir_y * (int16_t)speed);
 }
 
 static bool Path_AutoUpdate(uint32_t now_ms,
@@ -369,6 +437,10 @@ static bool Path_AutoUpdate(uint32_t now_ms,
         state = PATH_AUTO_STATE_DRIVE;
         path_auto_last_segment = path_diagnostics.segment_index;
         path_auto_segment_change_ms = now_ms - PATH_AUTO_SETTLE_MS;
+        path_front_armed = path_diagnostics.front_laser_online &&
+                           (path_diagnostics.front_distance_cm >
+                            PATH_FRONT_ARRIVE_CM);
+        Path_PidReset();
     }
 
     if (state == PATH_AUTO_STATE_DRIVE)
@@ -389,6 +461,7 @@ static bool Path_AutoUpdate(uint32_t now_ms,
         if ((uint32_t)(now_ms - path_auto_segment_change_ms) <
             PATH_AUTO_SETTLE_MS)
         {
+            Path_PidReset();
             path_diagnostics.auto_state = state;
             return true;
         }
@@ -461,7 +534,6 @@ void Path_Init(void)
     path_last_output_vy = 0;
     path_last_output_z = 0;
     path_processed_remote_sequence = 0U;
-    path_yaw_was_ready = false;
     path_auto_button_armed = true;
     path_auto_triggered = false;
     path_field_detected = false;
@@ -472,6 +544,7 @@ void Path_Init(void)
     path_handover = false;
     PathMap_SetMirrored(false);
 
+    Path_PidReset();
     path_diagnostics.initialized = true;
     path_diagnostics.segment_count = PATH_DT35_SEGMENT_COUNT;
     path_diagnostics.active_axis = PATH_MAP_AXIS_Y;
@@ -547,7 +620,6 @@ void Path_Run1ms(uint32_t now_ms)
         remote.online = false;
     }
     Path_ProcessModeButton(&remote);
-    Path_UpdateYawZeroLock();
     Path_UpdateLaserData();
 
     path_diagnostics.remote_online = remote.online;

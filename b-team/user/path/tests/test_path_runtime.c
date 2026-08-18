@@ -2,7 +2,6 @@
 
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
-#include "imu_main.h"
 
 volatile dt35_link_t dt35_link[SENSOR_LINK_COUNT];
 
@@ -13,12 +12,10 @@ volatile dt35_link_t dt35_link[SENSOR_LINK_COUNT];
 #include <stdio.h>
 #include <string.h>
 
-static imu_data_t mock_imu;
 static int16_t mock_chassis_vx;
 static int16_t mock_chassis_vy;
 static int16_t mock_chassis_z;
 static uint32_t mock_stop_count;
-static uint32_t mock_yaw_target_count;
 
 HAL_StatusTypeDef Chassis_SetVelocity(int16_t vx, int16_t vy, int16_t z)
 {
@@ -34,24 +31,6 @@ void Chassis_StopAll(void)
     mock_chassis_vy = 0;
     mock_chassis_z = 0;
     mock_stop_count++;
-}
-
-bool ImuMain_GetData(imu_data_t *data)
-{
-    *data = mock_imu;
-    return true;
-}
-
-void ImuMain_EnableYawHold(bool enabled)
-{
-    mock_imu.yaw_hold_enabled = enabled;
-}
-
-HAL_StatusTypeDef ImuMain_SetTargetYaw(float target_yaw_deg)
-{
-    mock_imu.target_yaw_deg = target_yaw_deg;
-    mock_yaw_target_count++;
-    return HAL_OK;
 }
 
 static void submit_and_run(int16_t raw_vx, int16_t raw_vy,
@@ -77,11 +56,6 @@ static void set_both(uint16_t front_cm, uint16_t left_cm)
 
 static void reset_mocks(void)
 {
-    mock_imu.yaw_deg = 0.0f;
-    mock_imu.state = IMU_STATE_READY;
-    mock_imu.online = true;
-    mock_imu.yaw_valid = true;
-    mock_imu.yaw_hold_enabled = true;
     mock_chassis_vx = 0;
     mock_chassis_vy = 0;
     mock_chassis_z = 0;
@@ -222,6 +196,24 @@ static void test_mirrored_dt35_route(void)
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DONE);
 }
 
+static void test_pid_slows_near_target(void)
+{
+    path_diagnostics_t diagnostics;
+
+    Path_Init();
+    reset_mocks();
+    set_both(36U, 10U);
+    Path_AutoStartTrigger();
+    Path_Run1ms(10U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
+    assert(diagnostics.segment_index == 0U);
+    assert(fabsf(diagnostics.pid_error_cm - 10.0f) < 0.01f);
+    assert(mock_chassis_vy > 30);
+    assert(mock_chassis_vy < 60);
+    assert(mock_chassis_vx == 0);
+}
+
 static void test_auto_takeover(void)
 {
     path_diagnostics_t diagnostics;
@@ -245,15 +237,13 @@ static void test_auto_takeover(void)
     assert(diagnostics.auto_state == PATH_AUTO_STATE_OFF);
 }
 
-static void test_yaw_zero_and_timeout(void)
+static void test_remote_timeout(void)
 {
     path_diagnostics_t diagnostics;
 
     Path_Init();
     reset_mocks();
     Path_Run1ms(1U);
-    assert(mock_yaw_target_count >= 1U);
-    assert(mock_imu.target_yaw_deg == 0.0f);
     Path_Run1ms(401U);
     assert(mock_chassis_vx == 0);
     assert(mock_chassis_vy == 0);
@@ -263,19 +253,14 @@ static void test_yaw_zero_and_timeout(void)
 
 int main(void)
 {
-    (void)memset(&mock_imu, 0, sizeof(mock_imu));
-    mock_imu.state = IMU_STATE_READY;
-    mock_imu.online = true;
-    mock_imu.yaw_valid = true;
-    mock_imu.yaw_hold_enabled = true;
-
     Path_Init();
     Path_Run1ms(0U);
     test_wait_for_dt35();
     test_normal_dt35_route();
     test_mirrored_dt35_route();
+    test_pid_slows_near_target();
     test_auto_takeover();
-    test_yaw_zero_and_timeout();
+    test_remote_timeout();
     puts("path runtime host tests: PASS");
     return 0;
 }
