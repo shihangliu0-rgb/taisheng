@@ -98,6 +98,19 @@ static void Path_UpdateLaserData(void)
         (path_diagnostics.left_distance_cm < PATH_LASER_STOP_CM);
 }
 
+static void Path_ApplyGlobalLaserLimit(int16_t *vx, int16_t *vy)
+{
+    /* 任意阶段：该方向激光 < 10 cm 就不准再往那边走。 */
+    if (path_diagnostics.front_hard_blocked && (*vy > 0))
+    {
+        *vy = 0;
+    }
+    if (path_diagnostics.left_hard_blocked && (*vx < 0))
+    {
+        *vx = 0;
+    }
+}
+
 static void Path_DetectFieldSide(void)
 {
     bool mirrored;
@@ -373,6 +386,7 @@ static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
     speed = Path_PidRun(remaining_cm);
     *vx = (int16_t)(dir_x * (int16_t)speed);
     *vy = (int16_t)(dir_y * (int16_t)speed);
+    Path_ApplyGlobalLaserLimit(vx, vy);
 }
 
 static bool Path_AutoUpdate(uint32_t now_ms,
@@ -631,14 +645,7 @@ void Path_Run1ms(uint32_t now_ms)
         vx = auto_vx;
         vy = auto_vy;
     }
-    if (path_diagnostics.front_hard_blocked && (vy > 0))
-    {
-        vy = 0;
-    }
-    if (path_diagnostics.left_hard_blocked && (vx < 0))
-    {
-        vx = 0;
-    }
+    Path_ApplyGlobalLaserLimit(&vx, &vy);
 
     primask = __get_PRIMASK();
     __disable_irq();

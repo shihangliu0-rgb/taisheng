@@ -111,6 +111,12 @@ static void Link_StoreFrame(void)
 
     if (sensor_parser.frame[0] == DT35_FRAME_HEADER)
     {
+        /*
+         * 主控串口：0x40/0x41 与车上前/左对调后再入库。
+         * 不改传感器子板。PNP 地址不动。
+         */
+        index = (index == SENSOR_LINK_F_INDEX) ?
+                SENSOR_LINK_L_B_INDEX : SENSOR_LINK_F_INDEX;
         dt35_link[index].distance_cm = value;
         dt35_link[index].last_rx_ms = now_ms;
         dt35_link[index].online = 1U;

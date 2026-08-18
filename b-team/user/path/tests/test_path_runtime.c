@@ -229,6 +229,26 @@ static void test_close_front_does_not_drive(void)
     assert(mock_chassis_vy == 0);
 }
 
+static void test_global_10cm_blocks_any_phase(void)
+{
+    path_diagnostics_t diagnostics;
+
+    Path_Init();
+    reset_mocks();
+    set_both(9U, 80U);
+    submit_and_run(0, 150, 0, 0U, 20U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_OFF);
+    assert(diagnostics.front_hard_blocked);
+    assert(mock_chassis_vy == 0);
+
+    set_both(80U, 9U);
+    submit_and_run(-150, 0, 0, 0U, 22U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.left_hard_blocked);
+    assert(mock_chassis_vx == 0);
+}
+
 static void test_auto_takeover(void)
 {
     path_diagnostics_t diagnostics;
@@ -275,6 +295,7 @@ int main(void)
     test_mirrored_dt35_route();
     test_pid_slows_near_target();
     test_close_front_does_not_drive();
+    test_global_10cm_blocks_any_phase();
     test_auto_takeover();
     test_remote_timeout();
     puts("path runtime host tests: PASS");
