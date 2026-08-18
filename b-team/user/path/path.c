@@ -1,6 +1,7 @@
 #include "path.h"
 
 #include "chassis_main.h"
+#include "dt35_pnp_link.h"
 #include "imu_main.h"
 #include "path_line_imu.h"
 
@@ -51,6 +52,57 @@ static uint8_t path_auto_last_segment;
 static uint32_t path_auto_segment_change_ms;
 static volatile uint16_t path_beep_counter_ms;
 static bool path_handover;
+
+static uint16_t Path_ClampLaserCm(uint16_t distance_cm, uint16_t max_cm)
+{
+    if (distance_cm < PATH_LASER_MIN_CM)
+    {
+        return PATH_LASER_MIN_CM;
+    }
+    if (distance_cm > max_cm)
+    {
+        return max_cm;
+    }
+    return distance_cm;
+}
+
+static void Path_UpdateLaserData(void)
+{
+    uint32_t primask;
+    uint16_t front_cm;
+    uint16_t left_cm;
+    bool front_online;
+    bool left_online;
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    front_cm = dt35_link[SENSOR_LINK_F_INDEX].distance_cm;
+    left_cm = dt35_link[SENSOR_LINK_L_B_INDEX].distance_cm;
+    front_online = dt35_link[SENSOR_LINK_F_INDEX].online != 0U;
+    left_online = dt35_link[SENSOR_LINK_L_B_INDEX].online != 0U;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+
+    path_diagnostics.front_laser_online = front_online;
+    path_diagnostics.left_laser_online = left_online;
+    path_diagnostics.front_distance_cm =
+        Path_ClampLaserCm(front_cm, PATH_FRONT_LASER_MAX_CM);
+    path_diagnostics.left_distance_cm =
+        Path_ClampLaserCm(left_cm, PATH_LEFT_LASER_MAX_CM);
+    /*
+     * 只做近距硬停：在线且 < 10 cm 立即刹整车。
+     * 0 按无回波处理，钳到 5 cm，因此也会停。
+     * 离线不停车，也不改自动状态。
+     */
+    path_diagnostics.front_hard_blocked =
+        front_online &&
+        (path_diagnostics.front_distance_cm < PATH_LASER_STOP_CM);
+    path_diagnostics.left_hard_blocked =
+        left_online &&
+        (path_diagnostics.left_distance_cm < PATH_LASER_STOP_CM);
+}
 
 static int16_t Path_AbsCommand(int16_t value)
 {
@@ -448,6 +500,7 @@ void Path_Run1ms(uint32_t now_ms)
     int16_t auto_vx;
     int16_t auto_vy;
     bool auto_stop = false;
+    bool laser_stop;
     uint32_t primask;
 
     if (!path_diagnostics.initialized)
@@ -468,6 +521,7 @@ void Path_Run1ms(uint32_t now_ms)
     }
     Path_ProcessModeButton(&remote);
     Path_UpdateYawZeroLock();
+    Path_UpdateLaserData();
     if (!path_handover)
     {
         Path_UpdateOdometryAndRoute();
@@ -496,6 +550,13 @@ void Path_Run1ms(uint32_t now_ms)
     {
         vx = auto_vx;
         vy = auto_vy;
+    }
+
+    laser_stop = path_diagnostics.front_hard_blocked ||
+                 path_diagnostics.left_hard_blocked;
+    if (laser_stop)
+    {
+        auto_stop = true;
     }
 
     primask = __get_PRIMASK();

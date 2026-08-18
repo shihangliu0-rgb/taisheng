@@ -11,8 +11,9 @@ extern "C" {
 #endif
 
 /*
- * 最小路径层：只用 PathLineImu 里程计，从上电假定起点跑固定 6 段。
- * 激光定点、镜像识别、地图净空、动态限速全部拿掉，之后再往回加。
+ * 最小路径层：PathLineImu 的 IMU 位移 + 固定 6 段。
+ * DT35 只做近距限制：在线且读数 < 10 cm 立即整车停车。
+ * 不用来定点、不判镜像、不限速爬行。离线不停。
  *
  * 遥控器六键 payload[4] 低 6 位：
  *   按键 3：自动启动接口（PATH_AUTO_START_ON_BUTTON=1 时必用）
@@ -43,6 +44,11 @@ extern "C" {
 #define PATH_RUNTIME_START_X_M        PATH_MAP_START_X_M
 #endif
 #define PATH_RUNTIME_START_Y_M        PATH_MAP_START_Y_M
+
+#define PATH_LASER_MIN_CM             5U
+#define PATH_LASER_STOP_CM            10U
+#define PATH_FRONT_LASER_MAX_CM       140U
+#define PATH_LEFT_LASER_MAX_CM        240U
 
 #define PATH_AUTO_STATE_WAIT          0U
 #define PATH_AUTO_STATE_READY_WAIT    1U

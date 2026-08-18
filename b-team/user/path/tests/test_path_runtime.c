@@ -1,8 +1,11 @@
 #include "path.h"
 
 #include "chassis_main.h"
+#include "dt35_pnp_link.h"
 #include "imu_main.h"
 #include "path_line_imu.h"
+
+volatile dt35_link_t dt35_link[SENSOR_LINK_COUNT];
 
 #include <assert.h>
 #include <math.h>
@@ -79,6 +82,7 @@ static void reset_mocks(void)
     mock_chassis_vx = 0;
     mock_chassis_vy = 0;
     mock_chassis_z = 0;
+    (void)memset((void *)dt35_link, 0, sizeof(dt35_link));
 }
 
 static void test_fixed_start_and_odom(void)
@@ -208,6 +212,67 @@ static void test_auto_takeover(void)
     assert(diagnostics.auto_state == PATH_AUTO_STATE_OFF);
 }
 
+static void set_laser(uint8_t index, uint16_t distance_cm, bool online)
+{
+    dt35_link[index].distance_cm = distance_cm;
+    dt35_link[index].online = online ? 1U : 0U;
+    dt35_link[index].last_rx_ms = 1U;
+}
+
+static void test_dt35_hard_stop(void)
+{
+    path_diagnostics_t diagnostics;
+
+    Path_Init();
+    reset_mocks();
+    Path_AutoStartTrigger();
+    Path_Run1ms(100U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
+    assert(mock_chassis_vy == 150);
+    assert(!diagnostics.front_hard_blocked);
+    assert(!diagnostics.left_hard_blocked);
+
+    set_laser(SENSOR_LINK_F_INDEX, 9U, true);
+    Path_Run1ms(101U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.front_hard_blocked);
+    assert(diagnostics.front_distance_cm == 9U);
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
+    assert(mock_chassis_vx == 0);
+    assert(mock_chassis_vy == 0);
+    assert(mock_stop_count >= 1U);
+
+    set_laser(SENSOR_LINK_F_INDEX, 11U, true);
+    Path_Run1ms(102U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(!diagnostics.front_hard_blocked);
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
+    assert(mock_chassis_vy == 150);
+
+    set_laser(SENSOR_LINK_F_INDEX, 0U, true);
+    Path_Run1ms(103U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.front_distance_cm == PATH_LASER_MIN_CM);
+    assert(diagnostics.front_hard_blocked);
+    assert(mock_chassis_vy == 0);
+
+    set_laser(SENSOR_LINK_F_INDEX, 0U, false);
+    Path_Run1ms(104U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(!diagnostics.front_laser_online);
+    assert(!diagnostics.front_hard_blocked);
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
+    assert(mock_chassis_vy == 150);
+
+    set_laser(SENSOR_LINK_L_B_INDEX, 8U, true);
+    Path_Run1ms(105U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.left_hard_blocked);
+    assert(diagnostics.left_distance_cm == 8U);
+    assert(mock_chassis_vy == 0);
+}
+
 static void test_yaw_zero_and_timeout(void)
 {
     path_diagnostics_t diagnostics;
@@ -239,6 +304,7 @@ int main(void)
     test_fixed_start_and_odom();
     test_auto_fixed_route();
     test_auto_takeover();
+    test_dt35_hard_stop();
     test_yaw_zero_and_timeout();
     puts("path runtime host tests: PASS");
     return 0;
