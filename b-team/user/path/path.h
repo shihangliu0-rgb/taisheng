@@ -11,9 +11,8 @@ extern "C" {
 #endif
 
 /*
- * 最小路径层：PathLineImu 的 IMU 位移 + 固定 6 段。
- * DT35 只做近距限制：朝传感器方向走且读数 < 10 cm 时，当前段视为到点，
- * 刹住后平移下一段。不用来定点、不判镜像。离线不干预。
+ * DT35 全局路径：不用 IMU 里程计。
+ * 上电等激光有数据，用左光判镜像，再按前光/左光阈值逐段走。
  *
  * 遥控器六键 payload[4] 低 6 位：
  *   按键 3：自动启动接口（PATH_AUTO_START_ON_BUTTON=1 时必用）
@@ -30,25 +29,21 @@ extern "C" {
 #define PATH_AUTO_START_ON_BUTTON     0
 #define PATH_AUTO_START_DELAY_MS      5000U
 
-/*
- * 场地侧别：编译期选定，运行时不判断。
- *   0 = 常规侧，贴西墙，起点 (0.374, 0.3085)，路线 上右上左上右
- *   1 = 镜像侧，贴东墙，起点 (2.626, 0.3085)，路线 上左上右上左
- */
-#ifndef PATH_USE_MIRRORED
-#define PATH_USE_MIRRORED             0
-#endif
-#if PATH_USE_MIRRORED
-#define PATH_RUNTIME_START_X_M        PATH_MAP_MIRRORED_START_X_M
-#else
-#define PATH_RUNTIME_START_X_M        PATH_MAP_START_X_M
-#endif
-#define PATH_RUNTIME_START_Y_M        PATH_MAP_START_Y_M
-
 #define PATH_LASER_MIN_CM             5U
 #define PATH_LASER_STOP_CM            10U
 #define PATH_FRONT_LASER_MAX_CM       140U
 #define PATH_LEFT_LASER_MAX_CM        240U
+
+/* 前光从初始值降到该值：当前前进段到点。 */
+#define PATH_FRONT_ARRIVE_CM          26U
+/* 左平移：左光减到该值到点。 */
+#define PATH_LEFT_NEAR_CM             32U
+/* 右平移：左光增到该值到点。 */
+#define PATH_LEFT_FAR_CM              222U
+/* 启动时左光 >= 该值判镜像（贴东墙、左光朝西看空地）。 */
+#define PATH_MIRROR_LEFT_CM           100U
+
+#define PATH_DT35_SEGMENT_COUNT       4U
 
 #define PATH_AUTO_STATE_WAIT          0U
 #define PATH_AUTO_STATE_READY_WAIT    1U

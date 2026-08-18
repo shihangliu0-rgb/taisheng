@@ -3,17 +3,13 @@
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
-#include "path_line_imu.h"
 
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
 
 #define PATH_REMOTE_TIMEOUT_MS          200U
-#define PATH_PI                         3.14159265358979323846f
 #define PATH_AUTO_FAST_COMMAND          150
-#define PATH_AUTO_FINE_COMMAND          75
-#define PATH_AUTO_FINE_DISTANCE_M       0.800f
 #define PATH_AUTO_TAKEOVER_COMMAND      10
 #define PATH_AUTO_BEEP_MS               160U
 #define PATH_AUTO_SETTLE_MS             400U
@@ -43,11 +39,11 @@ static volatile int16_t path_last_output_z;
 
 static path_diagnostics_t path_diagnostics;
 static uint32_t path_processed_remote_sequence;
-static float path_map_origin_x_m;
-static float path_map_origin_y_m;
 static bool path_yaw_was_ready;
 static bool path_auto_button_armed;
 static bool path_auto_triggered;
+static bool path_field_detected;
+static bool path_front_armed;
 static uint8_t path_auto_last_segment;
 static uint32_t path_auto_segment_change_ms;
 static volatile uint16_t path_beep_counter_ms;
@@ -91,10 +87,6 @@ static void Path_UpdateLaserData(void)
         Path_ClampLaserCm(front_cm, PATH_FRONT_LASER_MAX_CM);
     path_diagnostics.left_distance_cm =
         Path_ClampLaserCm(left_cm, PATH_LEFT_LASER_MAX_CM);
-    /*
-     * 近距标志：在线且 < 10 cm。0 钳到 5 cm，因此也算近。
-     * 离线不算阻挡。真正处理在自动段推进 / 遥控轴向限制里。
-     */
     path_diagnostics.front_hard_blocked =
         front_online &&
         (path_diagnostics.front_distance_cm < PATH_LASER_STOP_CM);
@@ -103,30 +95,24 @@ static void Path_UpdateLaserData(void)
         (path_diagnostics.left_distance_cm < PATH_LASER_STOP_CM);
 }
 
-static bool Path_LaserBlocksCommand(int16_t vx, int16_t vy)
+static void Path_DetectFieldSide(void)
 {
-    return (path_diagnostics.front_hard_blocked && (vy > 0)) ||
-           (path_diagnostics.left_hard_blocked && (vx < 0));
-}
+    bool mirrored;
 
-static void Path_AdvanceSegmentAsReached(uint32_t now_ms)
-{
-    uint8_t route_count;
-    const path_map_route_segment_t *route = PathMap_GetRoute(&route_count);
+    if (path_field_detected || !path_diagnostics.left_laser_online)
+    {
+        return;
+    }
 
-    if (path_diagnostics.segment_index < route_count)
-    {
-        path_diagnostics.segment_index++;
-    }
-    path_diagnostics.route_complete =
-        path_diagnostics.segment_index >= route_count;
-    path_auto_last_segment = path_diagnostics.segment_index;
-    path_auto_segment_change_ms = now_ms;
-    if (!path_diagnostics.route_complete)
-    {
-        path_diagnostics.active_axis =
-            route[path_diagnostics.segment_index].axis;
-    }
+    mirrored = (path_diagnostics.left_distance_cm >= PATH_MIRROR_LEFT_CM);
+    PathMap_SetMirrored(mirrored);
+    path_diagnostics.map_mirrored = mirrored;
+    path_diagnostics.left_initial_distance_m =
+        (float)path_diagnostics.left_distance_cm * 0.01f;
+    path_diagnostics.front_initial_distance_m =
+        (float)path_diagnostics.front_distance_cm * 0.01f;
+    path_field_detected = true;
+    path_diagnostics.initial_position_valid = true;
 }
 
 static int16_t Path_AbsCommand(int16_t value)
@@ -248,59 +234,84 @@ static void Path_UpdateYawZeroLock(void)
     path_diagnostics.yaw_zero_lock_ready = ready;
 }
 
-static void Path_UpdateOdometryAndRoute(void)
+static void Path_AdvanceSegment(uint32_t now_ms)
 {
-    path_line_imu_data_t odometry;
-    const path_map_route_segment_t *route;
-    uint8_t route_count;
-
-    path_diagnostics.odometry_valid =
-        PathLineImu_GetData(&odometry) && odometry.imu_solution_valid;
-    if (!path_diagnostics.odometry_valid)
-    {
-        return;
-    }
-
-    path_diagnostics.encoder_velocity_x_mps =
-        odometry.imu_velocity_x_mps;
-    path_diagnostics.encoder_velocity_y_mps =
-        odometry.imu_velocity_y_mps;
-
-    if (!path_diagnostics.initial_position_valid)
-    {
-        /*
-         * 假定上电时车在固定起点，里程计从 (0,0) 积起。
-         * 地图坐标 = 起点 + IMU 位移。
-         */
-        path_map_origin_x_m = PATH_RUNTIME_START_X_M -
-                              odometry.imu_position_x_m;
-        path_map_origin_y_m = PATH_RUNTIME_START_Y_M -
-                              odometry.imu_position_y_m;
-        path_diagnostics.initial_position_valid = true;
-        path_diagnostics.initial_map_x_m = PATH_RUNTIME_START_X_M;
-        path_diagnostics.initial_map_y_m = PATH_RUNTIME_START_Y_M;
-        path_diagnostics.initial_yaw_deg = 0.0f;
-    }
-
-    path_diagnostics.map_x_m = path_map_origin_x_m +
-                               odometry.imu_position_x_m;
-    path_diagnostics.map_y_m = path_map_origin_y_m +
-                               odometry.imu_position_y_m;
-
-    route = PathMap_GetRoute(&route_count);
-    while ((path_diagnostics.segment_index < route_count) &&
-           PathMap_SegmentReached(path_diagnostics.segment_index,
-                                  path_diagnostics.map_x_m,
-                                  path_diagnostics.map_y_m))
+    if (path_diagnostics.segment_index < PATH_DT35_SEGMENT_COUNT)
     {
         path_diagnostics.segment_index++;
     }
     path_diagnostics.route_complete =
-        path_diagnostics.segment_index >= route_count;
+        path_diagnostics.segment_index >= PATH_DT35_SEGMENT_COUNT;
+    path_auto_last_segment = path_diagnostics.segment_index;
+    path_auto_segment_change_ms = now_ms;
+    path_front_armed = path_diagnostics.front_laser_online &&
+                       (path_diagnostics.front_distance_cm >
+                        PATH_FRONT_ARRIVE_CM);
     if (!path_diagnostics.route_complete)
     {
         path_diagnostics.active_axis =
-            route[path_diagnostics.segment_index].axis;
+            ((path_diagnostics.segment_index % 2U) == 0U) ?
+            PATH_MAP_AXIS_Y : PATH_MAP_AXIS_X;
+    }
+}
+
+static bool Path_SegmentArrived(void)
+{
+    uint16_t front_cm = path_diagnostics.front_distance_cm;
+    uint16_t left_cm = path_diagnostics.left_distance_cm;
+    bool front_ok = path_diagnostics.front_laser_online;
+    bool left_ok = path_diagnostics.left_laser_online;
+    bool mirrored = path_diagnostics.map_mirrored;
+
+    switch (path_diagnostics.segment_index)
+    {
+    case 0U:
+    case 2U:
+        if (front_ok && (front_cm > PATH_FRONT_ARRIVE_CM))
+        {
+            path_front_armed = true;
+        }
+        return front_ok && path_front_armed &&
+               (front_cm <= PATH_FRONT_ARRIVE_CM);
+    case 1U:
+        if (mirrored)
+        {
+            return left_ok && (left_cm <= PATH_LEFT_NEAR_CM);
+        }
+        return left_ok && (left_cm >= PATH_LEFT_FAR_CM);
+    case 3U:
+        if (mirrored)
+        {
+            return left_ok && (left_cm >= PATH_LEFT_FAR_CM);
+        }
+        return left_ok && (left_cm <= PATH_LEFT_NEAR_CM);
+    default:
+        return false;
+    }
+}
+
+static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
+{
+    bool mirrored = path_diagnostics.map_mirrored;
+
+    *vx = 0;
+    *vy = 0;
+    switch (path_diagnostics.segment_index)
+    {
+    case 0U:
+    case 2U:
+        *vy = PATH_AUTO_FAST_COMMAND;
+        break;
+    case 1U:
+        *vx = mirrored ? (int16_t)-PATH_AUTO_FAST_COMMAND
+                       : PATH_AUTO_FAST_COMMAND;
+        break;
+    case 3U:
+        *vx = mirrored ? PATH_AUTO_FAST_COMMAND
+                       : (int16_t)-PATH_AUTO_FAST_COMMAND;
+        break;
+    default:
+        break;
     }
 }
 
@@ -310,12 +321,6 @@ static bool Path_AutoUpdate(uint32_t now_ms,
                             bool *force_stop)
 {
     uint8_t state = path_diagnostics.auto_state;
-    uint8_t route_count;
-    const path_map_route_segment_t *route;
-    const path_map_route_segment_t *segment;
-    float coordinate;
-    float remaining_m;
-    int16_t speed;
 
     *auto_vx = 0;
     *auto_vy = 0;
@@ -353,9 +358,10 @@ static bool Path_AutoUpdate(uint32_t now_ms,
 
     if (state == PATH_AUTO_STATE_READY_WAIT)
     {
-        if (!path_diagnostics.yaw_zero_lock_ready ||
-            !path_diagnostics.odometry_valid ||
-            !path_diagnostics.initial_position_valid)
+        Path_DetectFieldSide();
+        if (!path_diagnostics.front_laser_online ||
+            !path_diagnostics.left_laser_online ||
+            !path_field_detected)
         {
             path_diagnostics.auto_state = state;
             return false;
@@ -386,48 +392,25 @@ static bool Path_AutoUpdate(uint32_t now_ms,
             path_diagnostics.auto_state = state;
             return true;
         }
-        route = PathMap_GetRoute(&route_count);
-        if (path_diagnostics.segment_index < route_count)
+
+        Path_SegmentCommand(auto_vx, auto_vy);
+        if (Path_SegmentArrived())
         {
-            segment = &route[path_diagnostics.segment_index];
-            coordinate = (segment->axis == PATH_MAP_AXIS_X) ?
-                         path_diagnostics.map_x_m :
-                         path_diagnostics.map_y_m;
-            remaining_m = (segment->direction > 0) ?
-                          (segment->target_m - coordinate) :
-                          (coordinate - segment->target_m);
-            speed = (remaining_m > PATH_AUTO_FINE_DISTANCE_M) ?
-                    PATH_AUTO_FAST_COMMAND : PATH_AUTO_FINE_COMMAND;
-            if (segment->axis == PATH_MAP_AXIS_X)
+            Path_AdvanceSegment(now_ms);
+            *auto_vx = 0;
+            *auto_vy = 0;
+            *force_stop = true;
+            if (path_diagnostics.route_complete)
             {
-                *auto_vx = (int16_t)(segment->direction * speed);
+                path_beep_counter_ms = PATH_AUTO_BEEP_MS;
+                path_diagnostics.auto_state = PATH_AUTO_STATE_DONE;
+                path_handover = true;
             }
             else
             {
-                *auto_vy = (int16_t)(segment->direction * speed);
+                path_diagnostics.auto_state = state;
             }
-            /*
-             * 朝前光/+Y 或左光/-X 走到 < 10 cm：当前段当作到点，
-             * 刹住后进 400 ms 滑停，再平移下一段。不是卡死等距离恢复。
-             */
-            if (Path_LaserBlocksCommand(*auto_vx, *auto_vy))
-            {
-                Path_AdvanceSegmentAsReached(now_ms);
-                *auto_vx = 0;
-                *auto_vy = 0;
-                *force_stop = true;
-                if (path_diagnostics.route_complete)
-                {
-                    path_beep_counter_ms = PATH_AUTO_BEEP_MS;
-                    path_diagnostics.auto_state = PATH_AUTO_STATE_DONE;
-                    path_handover = true;
-                }
-                else
-                {
-                    path_diagnostics.auto_state = state;
-                }
-                return true;
-            }
+            return true;
         }
     }
 
@@ -478,24 +461,21 @@ void Path_Init(void)
     path_last_output_vy = 0;
     path_last_output_z = 0;
     path_processed_remote_sequence = 0U;
-    path_map_origin_x_m = PATH_RUNTIME_START_X_M;
-    path_map_origin_y_m = PATH_RUNTIME_START_Y_M;
     path_yaw_was_ready = false;
     path_auto_button_armed = true;
     path_auto_triggered = false;
+    path_field_detected = false;
+    path_front_armed = false;
     path_auto_last_segment = 0U;
     path_auto_segment_change_ms = 0U;
     path_beep_counter_ms = 0U;
     path_handover = false;
-    PathMap_SetMirrored(PATH_USE_MIRRORED != 0);
+    PathMap_SetMirrored(false);
 
     path_diagnostics.initialized = true;
-    path_diagnostics.map_mirrored = PathMap_IsMirrored();
-    path_diagnostics.segment_count = PATH_MAP_ROUTE_SEGMENT_COUNT;
+    path_diagnostics.segment_count = PATH_DT35_SEGMENT_COUNT;
     path_diagnostics.active_axis = PATH_MAP_AXIS_Y;
     path_diagnostics.auto_state = PATH_AUTO_STATE_WAIT;
-    path_diagnostics.initial_map_x_m = PATH_RUNTIME_START_X_M;
-    path_diagnostics.initial_map_y_m = PATH_RUNTIME_START_Y_M;
 }
 
 void Path_SubmitRemoteCommand(int16_t *vx, int16_t *vy, int16_t *z,
@@ -569,14 +549,6 @@ void Path_Run1ms(uint32_t now_ms)
     Path_ProcessModeButton(&remote);
     Path_UpdateYawZeroLock();
     Path_UpdateLaserData();
-    if (!path_handover)
-    {
-        Path_UpdateOdometryAndRoute();
-    }
-    else
-    {
-        path_diagnostics.odometry_valid = false;
-    }
 
     path_diagnostics.remote_online = remote.online;
     path_diagnostics.last_remote_ms = remote.timestamp_ms;
