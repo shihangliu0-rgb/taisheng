@@ -195,6 +195,21 @@ static void test_mirrored_dt35_route(void)
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DONE);
 }
 
+static void test_close_front_does_not_drive(void)
+{
+    path_diagnostics_t diagnostics;
+
+    Path_Init();
+    reset_mocks();
+    set_both(10U, 10U);
+    Path_AutoStartTrigger();
+    Path_Run1ms(10U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.front_distance_cm == 10U);
+    assert(diagnostics.segment_index >= 1U);
+    assert(mock_chassis_vy == 0);
+}
+
 static void test_auto_takeover(void)
 {
     path_diagnostics_t diagnostics;
@@ -239,6 +254,7 @@ int main(void)
     test_wait_for_dt35();
     test_normal_dt35_route();
     test_mirrored_dt35_route();
+    test_close_front_does_not_drive();
     test_auto_takeover();
     test_remote_timeout();
     puts("path runtime host tests: PASS");

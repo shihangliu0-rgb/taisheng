@@ -39,7 +39,6 @@ static uint32_t path_processed_remote_sequence;
 static bool path_auto_button_armed;
 static bool path_auto_triggered;
 static bool path_field_detected;
-static bool path_front_armed;
 static uint8_t path_auto_last_segment;
 static uint32_t path_auto_segment_change_ms;
 static volatile uint16_t path_beep_counter_ms;
@@ -196,9 +195,6 @@ static void Path_AdvanceSegment(uint32_t now_ms)
         path_diagnostics.segment_index >= PATH_DT35_SEGMENT_COUNT;
     path_auto_last_segment = path_diagnostics.segment_index;
     path_auto_segment_change_ms = now_ms;
-    path_front_armed = path_diagnostics.front_laser_online &&
-                       (path_diagnostics.front_distance_cm >
-                        PATH_FRONT_ARRIVE_CM);
     if (!path_diagnostics.route_complete)
     {
         path_diagnostics.active_axis =
@@ -219,12 +215,7 @@ static bool Path_SegmentArrived(void)
     {
     case 0U:
     case 2U:
-        if (front_ok && (front_cm > PATH_FRONT_ARRIVE_CM))
-        {
-            path_front_armed = true;
-        }
-        return front_ok && path_front_armed &&
-               (front_cm <= PATH_FRONT_ARRIVE_CM);
+        return front_ok && (front_cm <= PATH_FRONT_ARRIVE_CM);
     case 1U:
         if (mirrored)
         {
@@ -264,6 +255,27 @@ static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
         break;
     default:
         break;
+    }
+
+    /* 朝传感器走到阈值就不要再给速度，避免一直 150 撞墙。 */
+    if (path_diagnostics.front_laser_online &&
+        (path_diagnostics.front_distance_cm <= PATH_FRONT_ARRIVE_CM) &&
+        (*vy > 0))
+    {
+        *vy = 0;
+    }
+    if (path_diagnostics.left_laser_online)
+    {
+        if ((*vx < 0) &&
+            (path_diagnostics.left_distance_cm <= PATH_LEFT_NEAR_CM))
+        {
+            *vx = 0;
+        }
+        if ((*vx > 0) &&
+            (path_diagnostics.left_distance_cm >= PATH_LEFT_FAR_CM))
+        {
+            *vx = 0;
+        }
     }
 }
 
@@ -321,9 +333,6 @@ static bool Path_AutoUpdate(uint32_t now_ms,
         state = PATH_AUTO_STATE_DRIVE;
         path_auto_last_segment = path_diagnostics.segment_index;
         path_auto_segment_change_ms = now_ms - PATH_AUTO_SETTLE_MS;
-        path_front_armed = path_diagnostics.front_laser_online &&
-                           (path_diagnostics.front_distance_cm >
-                            PATH_FRONT_ARRIVE_CM);
     }
 
     if (state == PATH_AUTO_STATE_DRIVE)
@@ -419,7 +428,6 @@ void Path_Init(void)
     path_auto_button_armed = true;
     path_auto_triggered = false;
     path_field_detected = false;
-    path_front_armed = false;
     path_auto_last_segment = 0U;
     path_auto_segment_change_ms = 0U;
     path_beep_counter_ms = 0U;
@@ -525,16 +533,13 @@ void Path_Run1ms(uint32_t now_ms)
         vx = auto_vx;
         vy = auto_vy;
     }
-    else
+    if (path_diagnostics.front_hard_blocked && (vy > 0))
     {
-        if (path_diagnostics.front_hard_blocked && (vy > 0))
-        {
-            vy = 0;
-        }
-        if (path_diagnostics.left_hard_blocked && (vx < 0))
-        {
-            vx = 0;
-        }
+        vy = 0;
+    }
+    if (path_diagnostics.left_hard_blocked && (vx < 0))
+    {
+        vx = 0;
     }
 
     primask = __get_PRIMASK();
