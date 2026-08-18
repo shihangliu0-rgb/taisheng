@@ -6,7 +6,6 @@
 volatile dt35_link_t dt35_link[SENSOR_LINK_COUNT];
 
 #include <assert.h>
-#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -196,24 +195,6 @@ static void test_mirrored_dt35_route(void)
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DONE);
 }
 
-static void test_pid_slows_near_target(void)
-{
-    path_diagnostics_t diagnostics;
-
-    Path_Init();
-    reset_mocks();
-    set_both(36U, 10U);
-    Path_AutoStartTrigger();
-    Path_Run1ms(10U);
-    assert(Path_GetDiagnostics(&diagnostics));
-    assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
-    assert(diagnostics.segment_index == 0U);
-    assert(fabsf(diagnostics.pid_error_cm - 10.0f) < 0.01f);
-    assert(mock_chassis_vy > 30);
-    assert(mock_chassis_vy < 60);
-    assert(mock_chassis_vx == 0);
-}
-
 static void test_auto_takeover(void)
 {
     path_diagnostics_t diagnostics;
@@ -258,7 +239,6 @@ int main(void)
     test_wait_for_dt35();
     test_normal_dt35_route();
     test_mirrored_dt35_route();
-    test_pid_slows_near_target();
     test_auto_takeover();
     test_remote_timeout();
     puts("path runtime host tests: PASS");

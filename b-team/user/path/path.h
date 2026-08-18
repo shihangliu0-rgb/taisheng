@@ -12,7 +12,8 @@ extern "C" {
 
 /*
  * DT35 全局路径：不用 IMU。上电等激光有数据，用左光判镜像，
- * 按前光/左光阈值走 4 段；速度由与目标的差值做 PID。
+ * 按前光/左光阈值走 4 段。速度直接给 Chassis_SetVelocity，
+ * 轮速闭环在 VESC 里，路径层不再套一层 PID。
  *
  * 遥控器六键 payload[4] 低 6 位：
  *   按键 3：自动启动接口（PATH_AUTO_START_ON_BUTTON=1 时必用）
@@ -44,13 +45,7 @@ extern "C" {
 #define PATH_MIRROR_LEFT_CM           100U
 
 #define PATH_DT35_SEGMENT_COUNT       4U
-
-#define PATH_PID_KP                   4.0f
-#define PATH_PID_KI                   1.2f
-#define PATH_PID_KD                   0.05f
-#define PATH_PID_I_LIMIT              30.0f
-#define PATH_PID_OUT_MAX              150.0f
-#define PATH_PID_DT_S                 0.001f
+#define PATH_AUTO_FAST_COMMAND        150
 
 #define PATH_AUTO_STATE_WAIT          0U
 #define PATH_AUTO_STATE_READY_WAIT    1U
@@ -100,8 +95,6 @@ typedef struct
     float left_required_distance_m;
     float front_allowed_speed_mps;
     float left_allowed_speed_mps;
-    float pid_error_cm;
-    float pid_output;
     int16_t raw_vx;
     int16_t raw_vy;
     int16_t output_vx;
