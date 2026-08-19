@@ -1,0 +1,495 @@
+#include "path_main.h"
+
+#include "auto_chassis.h"
+#include "chassis_main.h"
+#include "dt35_pnp_link.h"
+#include "imu_main.h"
+
+#define PATH_CONTROL_PERIOD_MS       10U
+#define PATH_COMMAND_TIMEOUT_MS      50U
+#define PATH_DT35_TIMEOUT_MS         500U
+#define PATH_SEGMENT_SETTLE_MS       65U
+
+#define PATH_REMOTE_PA4_MASK         (1U << 5U)
+#define PATH_FRONT_SENSOR_INDEX      SENSOR_LINK_L_B_INDEX
+#define PATH_LEFT_SENSOR_INDEX       SENSOR_LINK_F_INDEX
+#define PATH_LASER_STOP_CM           10U
+#define PATH_FRONT_ARRIVE_CM         68U
+#define PATH_LEFT_NEAR_CM            69U
+#define PATH_LEFT_FAR_CM             200U
+#define PATH_MIRROR_LEFT_CM          100U
+
+#define PATH_SEGMENT_COUNT           4U
+#define PATH_SPEED_MAX               170.0f
+#define PATH_SPEED_MIN               45.0f
+#define PATH_PID_KP                  2.6f
+#define PATH_PID_KI                  1.2f
+#define PATH_PID_KD                  0.05f
+#define PATH_PID_I_LIMIT             30.0f
+#define PATH_PID_DT_S                0.01f
+#define PATH_ALIGN_DONE_DEG          2.0f
+#define PATH_ALIGN_TIMEOUT_MS        4000U
+
+typedef struct
+{
+    uint32_t last_rx_ms;
+    uint16_t distance_cm;
+    uint8_t online;
+} path_dt35_t;
+
+typedef struct
+{
+    float integral;
+    float last_error;
+    bool started;
+} path_pid_t;
+
+static uint8_t path_pa4_previous;
+static bool path_pa4_initialized;
+static uint32_t path_last_control_ms;
+static uint32_t path_segment_change_ms;
+static path_pid_t path_pid;
+static uint8_t path_auto_start_count;
+static bool path_yaw_aligning;
+static float path_hold_yaw_deg;
+static uint32_t path_align_start_ms;
+
+volatile path_state_t path_state = PATH_STATE_IDLE;
+volatile path_error_t path_error = PATH_ERROR_NONE;
+volatile uint8_t path_segment_index;
+volatile bool path_mirrored;
+
+static void PathMain_SetState(path_state_t state, path_error_t error)
+{
+    path_state = state;
+    path_error = error;
+}
+
+static void PathMain_ResetPid(void)
+{
+    path_pid.integral = 0.0f;
+    path_pid.last_error = 0.0f;
+    path_pid.started = false;
+}
+
+static void PathMain_LeaveAutomatic(path_state_t state,
+                                    path_error_t error)
+{
+    path_yaw_aligning = false;
+    Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
+    Chassis_SetControlMode(CHASSIS_CONTROL_MANUAL);
+    (void)ImuMain_CaptureCurrentYaw();
+    PathMain_SetState(state, error);
+}
+
+static float PathMain_Absf(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static float PathMain_WrapDeg(float angle_deg)
+{
+    while (angle_deg >= 180.0f)
+    {
+        angle_deg -= 360.0f;
+    }
+    while (angle_deg < -180.0f)
+    {
+        angle_deg += 360.0f;
+    }
+    return angle_deg;
+}
+
+/* 自动识别当前航向更靠近 0 还是 180，后续闭环都锁这个目标。 */
+static float PathMain_SelectHoldYaw(float yaw_deg)
+{
+    float to_zero = PathMain_Absf(PathMain_WrapDeg(yaw_deg));
+    float to_180 = PathMain_Absf(PathMain_WrapDeg(yaw_deg - 180.0f));
+
+    return (to_zero <= to_180) ? 0.0f : 180.0f;
+}
+
+static void PathMain_HoldSelectedYaw(void)
+{
+    imu_data_t imu;
+
+    if (!ImuMain_GetData(&imu))
+    {
+        return;
+    }
+    if (PathMain_Absf(PathMain_WrapDeg(imu.target_yaw_deg -
+                                       path_hold_yaw_deg)) > 0.5f)
+    {
+        (void)ImuMain_SetTargetYaw(path_hold_yaw_deg);
+    }
+}
+
+static bool PathMain_ImuReady(void)
+{
+    imu_data_t imu;
+
+    return ImuMain_GetData(&imu) && imu.online && imu.yaw_valid &&
+           imu.gyro_valid && (imu.state == IMU_STATE_READY);
+}
+
+static path_dt35_t PathMain_ReadDt35(uint8_t index)
+{
+    path_dt35_t sensor;
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    sensor.last_rx_ms = dt35_link[index].last_rx_ms;
+    sensor.distance_cm = dt35_link[index].distance_cm;
+    sensor.online = dt35_link[index].online;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+    return sensor;
+}
+
+static bool PathMain_Dt35Fresh(const path_dt35_t *sensor,
+                               uint32_t now_ms)
+{
+    return (sensor->online != 0U) &&
+           ((uint32_t)(now_ms - sensor->last_rx_ms) <=
+            PATH_DT35_TIMEOUT_MS);
+}
+
+static float PathMain_Clamp(float value, float low, float high)
+{
+    if (value < low)
+    {
+        return low;
+    }
+    if (value > high)
+    {
+        return high;
+    }
+    return value;
+}
+
+static int16_t PathMain_RunPid(float error_cm)
+{
+    float derivative = 0.0f;
+    float output;
+
+    if (error_cm <= 0.0f)
+    {
+        PathMain_ResetPid();
+        return 0;
+    }
+    if (path_pid.started)
+    {
+        derivative = (error_cm - path_pid.last_error) / PATH_PID_DT_S;
+    }
+    else
+    {
+        path_pid.started = true;
+    }
+    path_pid.integral = PathMain_Clamp(
+        path_pid.integral + PATH_PID_KI * error_cm * PATH_PID_DT_S,
+        -PATH_PID_I_LIMIT, PATH_PID_I_LIMIT);
+    path_pid.last_error = error_cm;
+    output = PATH_PID_KP * error_cm + path_pid.integral +
+             PATH_PID_KD * derivative;
+    output = PathMain_Clamp(output, PATH_SPEED_MIN, PATH_SPEED_MAX);
+    return (int16_t)(output + 0.5f);
+}
+
+static bool PathMain_SegmentArrived(const path_dt35_t *front,
+                                    const path_dt35_t *left)
+{
+    switch (path_segment_index)
+    {
+    case 0U:
+    case 2U:
+        return front->distance_cm <= PATH_FRONT_ARRIVE_CM;
+
+    case 1U:
+        return path_mirrored ?
+               (left->distance_cm <= PATH_LEFT_NEAR_CM) :
+               (left->distance_cm >= PATH_LEFT_FAR_CM);
+
+    case 3U:
+        return path_mirrored ?
+               (left->distance_cm >= PATH_LEFT_FAR_CM) :
+               (left->distance_cm <= PATH_LEFT_NEAR_CM);
+
+    default:
+        return true;
+    }
+}
+
+static void PathMain_GetSegmentCommand(const path_dt35_t *front,
+                                       const path_dt35_t *left,
+                                       int16_t *vx, int16_t *vy)
+{
+    float remaining_cm;
+
+    *vx = 0;
+    *vy = 0;
+    switch (path_segment_index)
+    {
+    case 0U:
+    case 2U:
+        remaining_cm = (float)front->distance_cm -
+                       (float)PATH_FRONT_ARRIVE_CM;
+        *vy = PathMain_RunPid(remaining_cm);
+        break;
+
+    case 1U:
+        if (path_mirrored)
+        {
+            remaining_cm = (float)left->distance_cm -
+                           (float)PATH_LEFT_NEAR_CM;
+            *vx = (int16_t)-PathMain_RunPid(remaining_cm);
+        }
+        else
+        {
+            remaining_cm = (float)PATH_LEFT_FAR_CM -
+                           (float)left->distance_cm;
+            *vx = PathMain_RunPid(remaining_cm);
+        }
+        break;
+
+    case 3U:
+        if (path_mirrored)
+        {
+            remaining_cm = (float)PATH_LEFT_FAR_CM -
+                           (float)left->distance_cm;
+            *vx = PathMain_RunPid(remaining_cm);
+        }
+        else
+        {
+            remaining_cm = (float)left->distance_cm -
+                           (float)PATH_LEFT_NEAR_CM;
+            *vx = (int16_t)-PathMain_RunPid(remaining_cm);
+        }
+        break;
+
+    default:
+        break;
+    }
+
+    if ((front->distance_cm < PATH_LASER_STOP_CM) && (*vy > 0))
+    {
+        *vy = 0;
+    }
+    if ((left->distance_cm < PATH_LASER_STOP_CM) && (*vx < 0))
+    {
+        *vx = 0;
+    }
+}
+
+static bool PathMain_Start(uint32_t now_ms)
+{
+    path_dt35_t front = PathMain_ReadDt35(PATH_FRONT_SENSOR_INDEX);
+    path_dt35_t left = PathMain_ReadDt35(PATH_LEFT_SENSOR_INDEX);
+    imu_data_t imu;
+
+    if (!PathMain_ImuReady() || !ImuMain_GetData(&imu))
+    {
+        PathMain_SetState(PATH_STATE_FAULT, PATH_ERROR_IMU);
+        return false;
+    }
+    if (!PathMain_Dt35Fresh(&front, now_ms) ||
+        !PathMain_Dt35Fresh(&left, now_ms))
+    {
+        PathMain_SetState(PATH_STATE_FAULT, PATH_ERROR_DT35);
+        return false;
+    }
+
+    path_hold_yaw_deg = PathMain_SelectHoldYaw(imu.yaw_deg);
+    if (ImuMain_SetTargetYaw(path_hold_yaw_deg) != HAL_OK)
+    {
+        PathMain_SetState(PATH_STATE_FAULT, PATH_ERROR_IMU);
+        return false;
+    }
+
+    path_mirrored = left.distance_cm >= PATH_MIRROR_LEFT_CM;
+    path_segment_index = 0U;
+    path_segment_change_ms = now_ms;
+    path_last_control_ms = now_ms - PATH_CONTROL_PERIOD_MS;
+    PathMain_ResetPid();
+
+    /* 第一次上电默认已对准，再按才先原地转到 0/180，避免对准拖慢速度。 */
+    path_auto_start_count++;
+    path_yaw_aligning = (path_auto_start_count > 1U);
+    path_align_start_ms = now_ms;
+
+    AutoChassis_Stop();
+    ImuMain_EnableYawHold(true);
+    Chassis_SetControlMode(CHASSIS_CONTROL_AUTONOMOUS);
+    PathMain_SetState(PATH_STATE_RUNNING, PATH_ERROR_NONE);
+    return true;
+}
+
+static void PathMain_RunAlign(uint32_t now_ms)
+{
+    imu_data_t imu;
+    float error_deg;
+
+    if (!PathMain_ImuReady() || !ImuMain_GetData(&imu))
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_FAULT, PATH_ERROR_IMU);
+        return;
+    }
+
+    PathMain_HoldSelectedYaw();
+    /* z=0，让 Chassis_Run1ms 里的 ImuMain_CalcOmega 原地转到目标航向。 */
+    if (Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS,
+                                0, 0, 0,
+                                PATH_COMMAND_TIMEOUT_MS) != HAL_OK)
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_FAULT, PATH_ERROR_CHASSIS);
+        return;
+    }
+
+    error_deg = PathMain_WrapDeg(imu.yaw_deg - path_hold_yaw_deg);
+    if ((PathMain_Absf(error_deg) <= PATH_ALIGN_DONE_DEG) ||
+        ((uint32_t)(now_ms - path_align_start_ms) >= PATH_ALIGN_TIMEOUT_MS))
+    {
+        path_yaw_aligning = false;
+        path_segment_change_ms = now_ms;
+        PathMain_ResetPid();
+    }
+}
+
+static void PathMain_RunControl(uint32_t now_ms)
+{
+    path_dt35_t front = PathMain_ReadDt35(PATH_FRONT_SENSOR_INDEX);
+    path_dt35_t left = PathMain_ReadDt35(PATH_LEFT_SENSOR_INDEX);
+    int16_t vx;
+    int16_t vy;
+
+    if (!PathMain_ImuReady())
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_FAULT, PATH_ERROR_IMU);
+        return;
+    }
+    if (!PathMain_Dt35Fresh(&front, now_ms) ||
+        !PathMain_Dt35Fresh(&left, now_ms))
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_FAULT, PATH_ERROR_DT35);
+        return;
+    }
+
+    /* 全程锁 0/180，防止段间停车时底盘把目标改成当前角。 */
+    PathMain_HoldSelectedYaw();
+
+    if (PathMain_SegmentArrived(&front, &left))
+    {
+        Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
+        path_segment_index++;
+        path_segment_change_ms = now_ms;
+        PathMain_ResetPid();
+        if (path_segment_index >= PATH_SEGMENT_COUNT)
+        {
+            PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
+                                    PATH_ERROR_NONE);
+        }
+        return;
+    }
+    if ((uint32_t)(now_ms - path_segment_change_ms) <
+        PATH_SEGMENT_SETTLE_MS)
+    {
+        Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
+        return;
+    }
+
+    PathMain_GetSegmentCommand(&front, &left, &vx, &vy);
+    /* z=0，始终走底盘 ImuMain_CalcOmega，把航向保持在 0/180。 */
+    if (Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS,
+                                vx, vy, 0,
+                                PATH_COMMAND_TIMEOUT_MS) != HAL_OK)
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_FAULT,
+                                PATH_ERROR_CHASSIS);
+    }
+}
+
+void PathMain_Init(void)
+{
+    path_segment_index = 0U;
+    path_mirrored = false;
+    path_pa4_previous = 0U;
+    path_pa4_initialized = false;
+    path_last_control_ms = HAL_GetTick();
+    path_segment_change_ms = path_last_control_ms;
+    path_auto_start_count = 0U;
+    path_yaw_aligning = false;
+    path_hold_yaw_deg = 0.0f;
+    path_align_start_ms = path_last_control_ms;
+    PathMain_ResetPid();
+    PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
+}
+
+void PathMain_Run(uint8_t remote_buttons, uint8_t remote_online)
+{
+    uint32_t now_ms = HAL_GetTick();
+    uint8_t pa4 = ((remote_buttons & PATH_REMOTE_PA4_MASK) != 0U) ?
+                  1U : 0U;
+
+    if (remote_online == 0U)
+    {
+        path_pa4_initialized = false;
+        path_pa4_previous = 0U;
+        if (path_state == PATH_STATE_RUNNING)
+        {
+            PathMain_LeaveAutomatic(PATH_STATE_FAULT,
+                                    PATH_ERROR_REMOTE);
+        }
+        return;
+    }
+
+    if (!path_pa4_initialized)
+    {
+        path_pa4_previous = pa4;
+        path_pa4_initialized = true;
+    }
+    else if ((pa4 != 0U) && (path_pa4_previous == 0U))
+    {
+        if (path_state == PATH_STATE_RUNNING)
+        {
+            PathMain_LeaveAutomatic(PATH_STATE_IDLE, PATH_ERROR_NONE);
+        }
+        else
+        {
+            (void)PathMain_Start(now_ms);
+        }
+    }
+    path_pa4_previous = pa4;
+
+    if (path_state != PATH_STATE_RUNNING)
+    {
+        return;
+    }
+    if (Chassis_GetControlMode() != CHASSIS_CONTROL_AUTONOMOUS)
+    {
+        PathMain_LeaveAutomatic(PATH_STATE_IDLE, PATH_ERROR_MANUAL);
+        return;
+    }
+    if ((uint32_t)(now_ms - path_last_control_ms) <
+        PATH_CONTROL_PERIOD_MS)
+    {
+        return;
+    }
+    path_last_control_ms = now_ms;
+    if (path_yaw_aligning)
+    {
+        PathMain_RunAlign(now_ms);
+        return;
+    }
+    PathMain_RunControl(now_ms);
+}
+
+void PathMain_Stop(void)
+{
+    PathMain_LeaveAutomatic(PATH_STATE_IDLE, PATH_ERROR_NONE);
+}
+
+bool PathMain_IsRunning(void)
+{
+    return path_state == PATH_STATE_RUNNING;
+}
