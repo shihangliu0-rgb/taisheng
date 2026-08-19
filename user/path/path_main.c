@@ -18,12 +18,14 @@
 #define PATH_LEFT_NEAR_CM            69U
 #define PATH_LEFT_FAR_CM             200U
 #define PATH_MIRROR_LEFT_CM          100U
-/* 1 开弧：段 1 横移切进通道 2，跳过段 2；0 与原来完全一样。 */
+/* 1 开弧：段 1 绕中间挡板画弧，串完通道 2 和回横移；0 与原来完全一样。 */
 #define PATH_ARC_ENABLE              1
-/* 左移提前给 vy，须大于 NEAR；等于 NEAR 则无弧。 */
+/* 左移提前进弧，须大于 NEAR；等于 NEAR 则无弧。 */
 #define PATH_LEFT_NEAR_ARC_CM        110U
-/* 右移提前给 vy，须小于 FAR；等于 FAR 则无弧。 */
+/* 右移提前进弧，须小于 FAR；等于 FAR 则无弧。 */
 #define PATH_LEFT_FAR_ARC_CM         160U
+/* 前激光比开口时少这么多，才算越过中间挡板，允许 vx 反向。 */
+#define PATH_ARC_CLEAR_CM            60U
 
 #define PATH_SEGMENT_COUNT           4U
 #define PATH_SPEED_MAX               170.0f
@@ -60,6 +62,9 @@ static bool path_yaw_aligning;
 static float path_hold_yaw_deg;
 static uint32_t path_align_start_ms;
 static bool path_arc_latched;
+static bool path_arc_opened;
+static bool path_arc_cleared;
+static uint16_t path_arc_front_open_cm;
 
 volatile path_state_t path_state = PATH_STATE_IDLE;
 volatile path_error_t path_error = PATH_ERROR_NONE;
@@ -79,10 +84,19 @@ static void PathMain_ResetPid(void)
     path_pid.started = false;
 }
 
+static void PathMain_ResetArc(void)
+{
+    path_arc_latched = false;
+    path_arc_opened = false;
+    path_arc_cleared = false;
+    path_arc_front_open_cm = 0U;
+}
+
 static void PathMain_LeaveAutomatic(path_state_t state,
                                     path_error_t error)
 {
     path_yaw_aligning = false;
+    PathMain_ResetArc();
     Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
     Chassis_SetControlMode(CHASSIS_CONTROL_MANUAL);
     (void)ImuMain_CaptureCurrentYaw();
@@ -203,6 +217,86 @@ static bool PathMain_ArcTrigger(const path_dt35_t *left)
     return left->distance_cm >= PATH_LEFT_FAR_ARC_CM;
 }
 
+static int16_t PathMain_ArcAxis(float error_cm)
+{
+    float output;
+
+    if (PathMain_Absf(error_cm) <= 1.0f)
+    {
+        return 0;
+    }
+    output = PATH_PID_KP * error_cm;
+    output = PathMain_Clamp(output, -PATH_SPEED_MAX, PATH_SPEED_MAX);
+    return (int16_t)(output + ((output >= 0.0f) ? 0.5f : -0.5f));
+}
+
+static void PathMain_ArcCommand(const path_dt35_t *front,
+                                const path_dt35_t *left,
+                                int16_t *vx, int16_t *vy)
+{
+    float left_cm = (float)left->distance_cm;
+    float front_cm = (float)front->distance_cm;
+    float left_first = path_mirrored ?
+                       (float)PATH_LEFT_NEAR_CM : (float)PATH_LEFT_FAR_CM;
+    float left_final = path_mirrored ?
+                       (float)PATH_LEFT_FAR_CM : (float)PATH_LEFT_NEAR_CM;
+    float desired_left = left_first;
+    float front_err = front_cm - (float)PATH_FRONT_ARRIVE_CM;
+    float span;
+    float alpha = 0.0f;
+
+    if (PathMain_ArcTrigger(left))
+    {
+        path_arc_latched = true;
+    }
+
+    /* 前激光看开，说明不再正对中间挡板。 */
+    if (front->distance_cm > PATH_FRONT_ARRIVE_CM)
+    {
+        if (!path_arc_opened)
+        {
+            path_arc_opened = true;
+            path_arc_front_open_cm = front->distance_cm;
+        }
+        if (!path_arc_cleared &&
+            (path_arc_front_open_cm > front->distance_cm) &&
+            ((uint16_t)(path_arc_front_open_cm - front->distance_cm) >=
+             PATH_ARC_CLEAR_CM))
+        {
+            path_arc_cleared = true;
+        }
+    }
+
+    if (path_arc_opened && path_arc_cleared)
+    {
+        span = (float)path_arc_front_open_cm -
+               (float)PATH_FRONT_ARRIVE_CM;
+        if (span < 1.0f)
+        {
+            span = 1.0f;
+        }
+        alpha = 1.0f - (front_err / span);
+        if (alpha < 0.0f)
+        {
+            alpha = 0.0f;
+        }
+        if (alpha > 1.0f)
+        {
+            alpha = 1.0f;
+        }
+        desired_left = left_first * (1.0f - alpha) + left_final * alpha;
+    }
+
+    *vx = PathMain_ArcAxis(desired_left - left_cm);
+    *vy = 0;
+    /* 没越过挡板前只许往开口里走，vx 保持第一段方向，不能反向切挡板。 */
+    if (path_arc_latched && path_arc_opened && (front_err > 0.0f))
+    {
+        *vy = (int16_t)(PathMain_Clamp(PATH_PID_KP * front_err,
+                                       0.0f, PATH_SPEED_MAX) + 0.5f);
+    }
+}
+
 static int16_t PathMain_RunPid(float error_cm)
 {
     float derivative = 0.0f;
@@ -242,17 +336,20 @@ static bool PathMain_SegmentArrived(const path_dt35_t *front,
 
     case 1U:
     {
-        bool lateral_done = path_mirrored ?
-                            (left->distance_cm <= PATH_LEFT_NEAR_CM) :
-                            (left->distance_cm >= PATH_LEFT_FAR_CM);
+        bool first_done = path_mirrored ?
+                          (left->distance_cm <= PATH_LEFT_NEAR_CM) :
+                          (left->distance_cm >= PATH_LEFT_FAR_CM);
+        bool final_done = path_mirrored ?
+                          (left->distance_cm >= PATH_LEFT_FAR_CM) :
+                          (left->distance_cm <= PATH_LEFT_NEAR_CM);
 
-        /* 画弧时要横移和通道 2 尽头一起到，才能跳过段 2。 */
+        /* 画弧把回横移也做完，要最终车道和通道尽头一起到。 */
         if (PathMain_ArcActive())
         {
-            return lateral_done &&
+            return final_done &&
                    (front->distance_cm <= PATH_FRONT_ARRIVE_CM);
         }
-        return lateral_done;
+        return first_done;
     }
 
     case 3U:
@@ -283,6 +380,11 @@ static void PathMain_GetSegmentCommand(const path_dt35_t *front,
         break;
 
     case 1U:
+        if (PathMain_ArcActive())
+        {
+            PathMain_ArcCommand(front, left, vx, vy);
+            break;
+        }
         if (path_mirrored)
         {
             remaining_cm = (float)left->distance_cm -
@@ -294,30 +396,6 @@ static void PathMain_GetSegmentCommand(const path_dt35_t *front,
             remaining_cm = (float)PATH_LEFT_FAR_CM -
                            (float)left->distance_cm;
             *vx = PathMain_RunPid(remaining_cm);
-        }
-        if (PathMain_ArcTrigger(left))
-        {
-            path_arc_latched = true;
-        }
-        /* 前激光看开后再给 vy，避免还对着通道 1 尽头往前撞。 */
-        if (path_arc_latched &&
-            (front->distance_cm > PATH_FRONT_ARRIVE_CM))
-        {
-            float front_remaining_cm = (float)front->distance_cm -
-                                       (float)PATH_FRONT_ARRIVE_CM;
-            float vy_cm;
-
-            if (remaining_cm > 1.0f)
-            {
-                vy_cm = PathMain_Absf((float)*vx) *
-                        (front_remaining_cm / remaining_cm);
-            }
-            else
-            {
-                vy_cm = PATH_PID_KP * front_remaining_cm;
-            }
-            *vy = (int16_t)(PathMain_Clamp(vy_cm, 0.0f,
-                                           PATH_SPEED_MAX) + 0.5f);
         }
         break;
 
@@ -385,7 +463,7 @@ static bool PathMain_Start(uint32_t now_ms)
     path_auto_start_count++;
     path_yaw_aligning = (path_auto_start_count > 1U);
     path_align_start_ms = now_ms;
-    path_arc_latched = false;
+    PathMain_ResetArc();
 
     AutoChassis_Stop();
     ImuMain_EnableYawHold(true);
@@ -452,14 +530,14 @@ static void PathMain_RunControl(uint32_t now_ms)
         Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
         if ((path_segment_index == 1U) && PathMain_ArcActive())
         {
-            /* 弧线已到通道 2 尽头，跳过段 2，不再停一次。 */
-            path_segment_index = 3U;
+            /* 弧线已含回横移，整段自动结束。 */
+            path_segment_index = PATH_SEGMENT_COUNT;
         }
         else
         {
             path_segment_index++;
         }
-        path_arc_latched = false;
+        PathMain_ResetArc();
         path_segment_change_ms = now_ms;
         PathMain_ResetPid();
         if (path_segment_index >= PATH_SEGMENT_COUNT)
@@ -499,7 +577,7 @@ void PathMain_Init(void)
     path_yaw_aligning = false;
     path_hold_yaw_deg = 0.0f;
     path_align_start_ms = path_last_control_ms;
-    path_arc_latched = false;
+    PathMain_ResetArc();
     PathMain_ResetPid();
     PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
 }
