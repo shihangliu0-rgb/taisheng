@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>抬升路径仿真</title>
+  <style>
+    :root {
+      --bg: #10141c;
+      --panel: #1a2130;
+      --line: #2c3648;
+      --text: #e8eef8;
+      --muted: #93a0b8;
+      --ok: #3dd68c;
+      --bad: #ff6b6b;
+      --arc: #ffb020;
+      --seg0: #5aa8ff;
+      --seg1: #7c6bff;
+      --seg2: #3dd68c;
+      --seg3: #ff8a5b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+    }
+    .wrap {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      height: 100%;
+    }
+    aside, .hud {
+      padding: 18px;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      overflow: auto;
+    }
+    .hud { border-right: 0; border-left: 1px solid var(--line); }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p, label, .stat { font-size: 13px; color: var(--muted); line-height: 1.45; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+    button, select {
+      background: #243044;
+      color: var(--text);
+      border: 1px solid #3a4860;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.primary { background: #2f6dff; border-color: #2f6dff; }
+    button:hover { filter: brightness(1.08); }
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #0c1018;
+    }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    .stat b { color: var(--text); font-weight: 600; }
+    .cases { display: grid; gap: 6px; margin-top: 10px; }
+    .case {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #121826;
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <aside>
+      <h1>S 弯 / 画弧仿真</h1>
+      <p>控制逻辑按 <code>path_main.c</code> 逐步复刻：DT35 四段、第一次跳过对准、段 1 画弧跳过通道 2。</p>
+      <div class="row">
+        <button class="primary" id="btnStart">起步</button>
+        <button id="btnPause">暂停</button>
+        <button id="btnReset">复位</button>
+      </div>
+      <div class="toggle"><span>画弧 PATH_ARC_ENABLE</span><input id="arcOn" type="checkbox" checked /></div>
+      <div class="toggle"><span>镜像场地</span><input id="mirrorOn" type="checkbox" /></div>
+      <div class="toggle"><span>第二次起步（先对准）</span><input id="secondOn" type="checkbox" /></div>
+      <label>播放倍速
+        <select id="speed">
+          <option value="1">1x</option>
+          <option value="4" selected>4x</option>
+          <option value="10">10x</option>
+          <option value="30">30x</option>
+        </select>
+      </label>
+      <div class="row">
+        <button id="btnBatch">跑完全部用例</button>
+      </div>
+      <div class="cases" id="cases"></div>
+    </aside>
+    <canvas id="field"></canvas>
+    <section class="hud">
+      <h1>状态</h1>
+      <div class="stat">状态 <b id="st">IDLE</b></div>
+      <div class="stat">段 <b id="seg">-</b></div>
+      <div class="stat">前激光 <b id="front">-</b> cm</div>
+      <div class="stat">左激光 <b id="left">-</b> cm</div>
+      <div class="stat">vx / vy <b id="vel">0 / 0</b></div>
+      <div class="stat">位置 <b id="pos">-</b></div>
+      <div class="stat">航向 <b id="yaw">-</b></div>
+      <div class="stat">用时 <b id="t">0</b> ms</div>
+      <div class="stat">画弧锁存 <b id="latch">否</b></div>
+      <div class="stat" id="result">尚未起步</div>
+      <p>蓝=段0 前进，紫=段1 横移/弧，绿=段2 通道2，橙=段3 回收。黄点=正在给 vy 的弧线段。</p>
+    </section>
+  </div>
+  <script src="path_sim.js"></script>
+  <script>
+    const canvas = document.getElementById("field");
+    const ctx = canvas.getContext("2d");
+    const SEG_COLOR = ["#5aa8ff", "#7c6bff", "#3dd68c", "#ff8a5b"];
+    const STATE_NAME = { 16: "IDLE", 17: "RUNNING", 18: "FINISHED", 19: "FAULT" };
+
+    let world = null;
+    let playing = false;
+    let lastTs = 0;
+    let leftover = 0;
+
+    function currentCfg() {
+      return {
+        ARC_ENABLE: document.getElementById("arcOn").checked ? 1 : 0
+      };
+    }
+
+    function rebuild() {
+      const mirrored = document.getElementById("mirrorOn").checked;
+      const second = document.getElementById("secondOn").checked;
+      world = PathSim.createWorld({
+        mirrored: mirrored,
+        startYaw: second ? 16 : 0,
+        cfg: currentCfg()
+      });
+      if (second) {
+        world.ctrl.s.startCount = 1;
+      }
+      playing = false;
+      leftover = 0;
+      draw();
+      renderHud();
+    }
+
+    function startRun() {
+      if (!world || world.finished || world.failed) {
+        rebuild();
+      }
+      if (world.ctrl.s.state === PathSim.STATE.IDLE) {
+        world.start();
+      }
+      playing = true;
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      draw();
+    }
+
+    function fieldToCanvas(x, y) {
+      const pad = 36 * devicePixelRatio;
+      const w = canvas.width - pad * 2;
+      const h = canvas.height - pad * 2;
+      const sx = w / PathSim.CFG.FIELD_W;
+      const sy = h / PathSim.CFG.FIELD_H;
+      const s = Math.min(sx, sy);
+      const ox = (canvas.width - PathSim.CFG.FIELD_W * s) / 2;
+      const oy = (canvas.height - PathSim.CFG.FIELD_H * s) / 2;
+      return {
+        x: ox + x * s,
+        y: canvas.height - (oy + y * s),
+        s: s
+      };
+    }
+
+    function drawRobot(p, r) {
+      const d = world.dirs();
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = "#dce7ff";
+      ctx.fill();
+      ctx.strokeStyle = "#2f6dff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(d.fx * r * 1.4, -d.fy * r * 1.4);
+      ctx.strokeStyle = "#ffb020";
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function draw() {
+      if (!world) {
+        return;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#0c1018";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const a = fieldToCanvas(0, 0);
+      const b = fieldToCanvas(PathSim.CFG.FIELD_W, PathSim.CFG.FIELD_H);
+      ctx.strokeStyle = "#243044";
+      ctx.strokeRect(a.x, b.y, b.x - a.x, a.y - b.y);
+
+      world.walls.forEach(function (w) {
+        const p1 = fieldToCanvas(w.x1, w.y1);
+        const p2 = fieldToCanvas(w.x2, w.y2);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = "#8ea0c0";
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      });
+
+      if (world.trail.length > 1) {
+        for (let i = 1; i < world.trail.length; i++) {
+          const p1 = fieldToCanvas(world.trail[i - 1].x, world.trail[i - 1].y);
+          const p2 = fieldToCanvas(world.trail[i].x, world.trail[i].y);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.strokeStyle = world.trail[i].arc ? "#ffb020" : SEG_COLOR[world.trail[i].seg] || "#fff";
+          ctx.lineWidth = world.trail[i].arc ? 4 : 3;
+          ctx.stroke();
+        }
+      }
+
+      function drawRay(hit, color) {
+        if (!hit) {
+          return;
+        }
+        const p0 = fieldToCanvas(world.x, world.y);
+        const p1 = fieldToCanvas(hit.x, hit.y);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.strokeStyle = color;
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      drawRay(world.frontHit, "rgba(255,176,32,0.8)");
+      drawRay(world.leftHit, "rgba(90,168,255,0.8)");
+
+      const pr = fieldToCanvas(world.x, world.y);
+      drawRobot(pr, PathSim.CFG.ROBOT_R * pr.s);
+    }
+
+    function renderHud() {
+      if (!world) {
+        return;
+      }
+      document.getElementById("st").textContent = STATE_NAME[world.ctrl.s.state] || world.ctrl.s.state;
+      document.getElementById("seg").textContent = world.ctrl.s.segment;
+      document.getElementById("front").textContent = world.frontCm;
+      document.getElementById("left").textContent = world.leftCm;
+      document.getElementById("vel").textContent = world.vx + " / " + world.vy;
+      document.getElementById("pos").textContent = world.x.toFixed(1) + ", " + world.y.toFixed(1);
+      document.getElementById("yaw").textContent = world.yaw.toFixed(1) + " → " + world.ctrl.s.holdYaw;
+      document.getElementById("t").textContent = world.nowMs;
+      document.getElementById("latch").textContent = world.ctrl.s.arcLatched ? "是" : "否";
+      const el = document.getElementById("result");
+      if (world.finished) {
+        el.className = "stat ok";
+        el.textContent = "跑通" + (world.usedSeg2 ? "（走了段2）" : "（跳过通道2）");
+      } else if (world.failed) {
+        el.className = "stat bad";
+        el.textContent = "失败：" + world.failReason;
+      } else {
+        el.className = "stat";
+        el.textContent = playing ? "运行中" : "待命";
+      }
+    }
+
+    function frame(ts) {
+      requestAnimationFrame(frame);
+      if (!playing || !world) {
+        return;
+      }
+      if (!lastTs) {
+        lastTs = ts;
+      }
+      leftover += (ts - lastTs) * Number(document.getElementById("speed").value);
+      lastTs = ts;
+      const step = PathSim.CFG.CONTROL_PERIOD_MS;
+      let guard = 0;
+      while (leftover >= step && guard < 80 && playing) {
+        world.tick();
+        leftover -= step;
+        guard += 1;
+        if (world.finished || world.failed) {
+          playing = false;
+        }
+      }
+      draw();
+      renderHud();
+    }
+
+    document.getElementById("btnStart").onclick = startRun;
+    document.getElementById("btnPause").onclick = function () { playing = false; };
+    document.getElementById("btnReset").onclick = rebuild;
+    document.getElementById("arcOn").onchange = rebuild;
+    document.getElementById("mirrorOn").onchange = rebuild;
+    document.getElementById("secondOn").onchange = rebuild;
+    document.getElementById("btnBatch").onclick = function () {
+      const box = document.getElementById("cases");
+      box.innerHTML = "";
+      PathSim.verifyAll().forEach(function (r) {
+        const div = document.createElement("div");
+        div.className = "case";
+        div.innerHTML = "<b class='" + (r.ok ? "ok" : "bad") + "'>" +
+          (r.ok ? "PASS" : "FAIL") + "</b> " + r.name +
+          "<br>" + r.timeMs + "ms  usedSeg2=" + r.usedSeg2 +
+          (r.reason ? "<br>" + r.reason : "");
+        box.appendChild(div);
+      });
+    };
+
+    window.addEventListener("resize", resize);
+    rebuild();
+    resize();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
