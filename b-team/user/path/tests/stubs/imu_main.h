@@ -29,6 +29,5 @@ typedef struct
 bool ImuMain_GetData(imu_data_t *data);
 void ImuMain_EnableYawHold(bool enabled);
 HAL_StatusTypeDef ImuMain_SetTargetYaw(float target_yaw_deg);
-void ImuMain_HoldTargetYaw(float target_yaw_deg);
 
 #endif

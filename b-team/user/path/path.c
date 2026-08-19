@@ -2,9 +2,7 @@
 
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
-#include "imu_main.h"
 
-#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -63,7 +61,6 @@ static float path_pid_kp;
 static float path_pid_ki;
 static float path_pid_kd;
 static float path_pid_i_limit;
-static bool path_yaw_hold_latched;
 
 static void Path_LoadFieldConfig(bool mirrored)
 {
@@ -154,39 +151,6 @@ static void Path_ApplyGlobalLaserLimit(int16_t *vx, int16_t *vy)
     if (path_diagnostics.left_hard_blocked && (*vx < 0))
     {
         *vx = 0;
-    }
-}
-
-static bool Path_YawAligned(void)
-{
-    imu_data_t imu;
-
-    if (!ImuMain_GetData(&imu) ||
-        (imu.state != IMU_STATE_READY) ||
-        !imu.online ||
-        !imu.yaw_valid)
-    {
-        path_diagnostics.yaw_zero_lock_ready = false;
-        return false;
-    }
-
-    path_diagnostics.initial_yaw_deg = imu.yaw_deg;
-    path_diagnostics.yaw_zero_lock_ready =
-        (fabsf(imu.yaw_deg) <= PATH_YAW_ALIGN_DEG);
-    return path_diagnostics.yaw_zero_lock_ready;
-}
-
-static void Path_HoldYawZero(bool reset_pid)
-{
-    ImuMain_EnableYawHold(true);
-    if (reset_pid || !path_yaw_hold_latched)
-    {
-        (void)ImuMain_SetTargetYaw(0.0f);
-        path_yaw_hold_latched = true;
-    }
-    else
-    {
-        ImuMain_HoldTargetYaw(0.0f);
     }
 }
 
@@ -364,12 +328,6 @@ static bool Path_SegmentArrived(void)
     bool left_ok = path_diagnostics.left_laser_online;
     bool mirrored = path_diagnostics.map_mirrored;
 
-    /* 车头偏了侧光会提前扫到墙或扫空，不到点。 */
-    if (!Path_YawAligned())
-    {
-        return false;
-    }
-
     switch (path_diagnostics.segment_index)
     {
     case 0U:
@@ -460,11 +418,6 @@ static void Path_SegmentCommand(int16_t *vx, int16_t *vy)
 
     *vx = 0;
     *vy = 0;
-    if (!Path_YawAligned())
-    {
-        Path_PidReset();
-        return;
-    }
     if (!Path_GetRemainingCm(&remaining_cm, &dir_x, &dir_y) ||
         (remaining_cm <= 0.0f))
     {
@@ -532,7 +485,6 @@ static bool Path_AutoUpdate(uint32_t now_ms,
         state = PATH_AUTO_STATE_DRIVE;
         path_auto_last_segment = path_diagnostics.segment_index;
         path_auto_segment_change_ms = now_ms - path_settle_ms;
-        Path_HoldYawZero(true);
         Path_PidReset();
     }
 
@@ -633,7 +585,6 @@ void Path_Init(void)
     path_auto_segment_change_ms = 0U;
     path_beep_counter_ms = 0U;
     path_handover = false;
-    path_yaw_hold_latched = false;
     Path_LoadFieldConfig(false);
 
     Path_PidReset();

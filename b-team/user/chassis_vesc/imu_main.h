@@ -104,13 +104,6 @@ HAL_StatusTypeDef ImuMain_CaptureCurrentYaw(void);
 HAL_StatusTypeDef ImuMain_SetTargetYaw(float target_yaw_deg);
 
 /**
- * @brief 只改航向保持目标，不复位 PID（自动锁 0° 用）
- * @param target_yaw_deg 目标偏航角，单位为 deg
- * @retval None
- */
-void ImuMain_HoldTargetYaw(float target_yaw_deg);
-
-/**
  * @brief 设置航向保持使能状态
  * @param enabled 是否使能
  * @retval None

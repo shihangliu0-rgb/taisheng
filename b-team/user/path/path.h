@@ -13,9 +13,7 @@ extern "C" {
 /*
  * DT35 全局路径：不用 IMU。上电等激光有数据，用左光判镜像，
  * 再载入该场地在本头文件里的那一套宏。自动速度由「到目标的
- * 剩余厘米」做 PID：远了顶满 PATH_AUTO_FAST_COMMAND，近了减速。
- * 自动全程锁 yaw=0；|yaw| 大于 PATH_YAW_ALIGN_DEG 先纠航向，
- * 不平移、不用侧光到点。轮速闭环仍在 VESC。
+ * 剩余厘米」做 PID：远了顶满 150，近了减速。轮速闭环仍在 VESC。
  *
  * 遥控器六键 payload[4] 低 6 位：
  *   按键 3：自动启动接口（PATH_AUTO_START_ON_BUTTON=1 时必用）
@@ -40,15 +38,13 @@ extern "C" {
 
 #define PATH_DT35_SEGMENT_COUNT       4U
 #define PATH_PID_DT_S                 0.001f
-/* 自动中 |yaw| 超过该值：停车纠航向，侧光不到点。 */
-#define PATH_YAW_ALIGN_DEG            5.0f
 
 /* ========== 常规场地（左光 < PATH_MIRROR_LEFT_CM）========== */
 #define PATH_FRONT_ARRIVE_CM          26U
 #define PATH_LEFT_NEAR_CM             32U
 #define PATH_LEFT_FAR_CM              222U
 #define PATH_LASER_STOP_CM            10U
-#define PATH_AUTO_FAST_COMMAND        80
+#define PATH_AUTO_FAST_COMMAND        150
 #define PATH_AUTO_SETTLE_MS           400U
 #define PATH_PID_KP                   4.0f
 #define PATH_PID_KI                   1.2f
@@ -60,7 +56,7 @@ extern "C" {
 #define PATH_MIRROR_LEFT_NEAR_CM      32U
 #define PATH_MIRROR_LEFT_FAR_CM       222U
 #define PATH_MIRROR_LASER_STOP_CM     10U
-#define PATH_MIRROR_FAST_COMMAND      80
+#define PATH_MIRROR_FAST_COMMAND      150
 #define PATH_MIRROR_SETTLE_MS         400U
 #define PATH_MIRROR_PID_KP            4.0f
 #define PATH_MIRROR_PID_KI            1.2f

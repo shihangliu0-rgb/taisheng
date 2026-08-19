@@ -782,22 +782,6 @@ HAL_StatusTypeDef ImuMain_SetTargetYaw(float target_yaw_deg)
 }
 
 /**
- * @brief 只改航向保持目标，不复位 PID
- * @param target_yaw_deg 目标偏航角，单位为 deg
- * @retval None
- */
-void ImuMain_HoldTargetYaw(float target_yaw_deg)
-{
-    if (!initialized || isnan(target_yaw_deg) || isinf(target_yaw_deg))
-    {
-        return;
-    }
-
-    imu_data.target_yaw_deg = normalize_angle(target_yaw_deg);
-    yaw_control.target_valid = true;
-}
-
-/**
  * @brief 设置航向保持使能状态
  * @param enabled 是否使能
  * @retval None
