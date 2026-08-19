@@ -10,7 +10,8 @@
 #define PATH_DT35_TIMEOUT_MS         500U
 #define PATH_SEGMENT_SETTLE_MS       65U
 
-#define PATH_REMOTE_PA4_MASK         (1U << 5U)
+#define PATH_REMOTE_PA0_MASK         (1U << 0U)
+#define PATH_REMOTE_PA4_MASK         (1U << 5U) /* 兼容旧宏，实际只用 PA0 */
 #define PATH_FRONT_SENSOR_INDEX      SENSOR_LINK_L_B_INDEX
 #define PATH_LEFT_SENSOR_INDEX       SENSOR_LINK_F_INDEX
 #define PATH_LASER_STOP_CM           10U
@@ -38,6 +39,11 @@
 #define PATH_ALIGN_DONE_DEG          2.0f
 #define PATH_ALIGN_TIMEOUT_MS        4000U
 
+/* ========== 自动跑宏开关（方便一键切换） ========== */
+#define PATH_AUTO_RUN_ENABLE         1 /* 1=上电自动跑，0=纯PA0遥控 */
+#define PATH_AUTO_START_DELAY_MS     5000U /* 上电5s后自动起跑 */
+#define PATH_AUTO_RESTART_DELAY_MS   10000U /* 终点后10s等待期，人工掉头时只做yaw纠正 */
+
 typedef struct
 {
     uint32_t last_rx_ms;
@@ -52,8 +58,8 @@ typedef struct
     bool started;
 } path_pid_t;
 
-static uint8_t path_pa4_previous;
-static bool path_pa4_initialized;
+static uint8_t path_pa0_previous;
+static bool path_pa0_initialized;
 static uint32_t path_last_control_ms;
 static uint32_t path_segment_change_ms;
 static path_pid_t path_pid;
@@ -65,6 +71,11 @@ static bool path_arc_latched;
 static bool path_arc_opened;
 static bool path_arc_cleared;
 static uint16_t path_arc_front_open_cm;
+#if PATH_AUTO_RUN_ENABLE
+static uint32_t path_init_ms;
+static uint32_t path_finished_ms;
+static bool path_auto_waiting;
+#endif
 
 volatile path_state_t path_state = PATH_STATE_IDLE;
 volatile path_error_t path_error = PATH_ERROR_NONE;
@@ -98,6 +109,19 @@ static void PathMain_LeaveAutomatic(path_state_t state,
     path_yaw_aligning = false;
     PathMain_ResetArc();
     Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
+#if PATH_AUTO_RUN_ENABLE
+    if (state == PATH_STATE_FINISHED)
+    {
+        /* 自动循环：保持 AUTONOMOUS 以便10s等待期做yaw纠正 */
+        PathMain_SetState(state, error);
+        path_finished_ms = HAL_GetTick();
+        path_auto_waiting = true;
+        Chassis_SetControlMode(CHASSIS_CONTROL_AUTONOMOUS);
+        ImuMain_EnableYawHold(true);
+        return;
+    }
+    path_auto_waiting = false;
+#endif
     Chassis_SetControlMode(CHASSIS_CONTROL_MANUAL);
     (void)ImuMain_CaptureCurrentYaw();
     PathMain_SetState(state, error);
@@ -569,8 +593,8 @@ void PathMain_Init(void)
 {
     path_segment_index = 0U;
     path_mirrored = false;
-    path_pa4_previous = 0U;
-    path_pa4_initialized = false;
+    path_pa0_previous = 0U;
+    path_pa0_initialized = false;
     path_last_control_ms = HAL_GetTick();
     path_segment_change_ms = path_last_control_ms;
     path_auto_start_count = 0U;
@@ -580,18 +604,78 @@ void PathMain_Init(void)
     PathMain_ResetArc();
     PathMain_ResetPid();
     PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
+#if PATH_AUTO_RUN_ENABLE
+    path_init_ms = path_last_control_ms;
+    path_finished_ms = 0U;
+    path_auto_waiting = false;
+#endif
 }
 
 void PathMain_Run(uint8_t remote_buttons, uint8_t remote_online)
 {
     uint32_t now_ms = HAL_GetTick();
-    uint8_t pa4 = ((remote_buttons & PATH_REMOTE_PA4_MASK) != 0U) ?
+    uint8_t pa0 = ((remote_buttons & PATH_REMOTE_PA0_MASK) != 0U) ?
                   1U : 0U;
+
+#if PATH_AUTO_RUN_ENABLE
+    /* FINISHED后10s等待：人工掉头，固件只做yaw纠正 */
+    if ((path_state == PATH_STATE_FINISHED) && path_auto_waiting)
+    {
+        if (PathMain_ImuReady())
+        {
+            imu_data_t imu;
+            if (ImuMain_GetData(&imu))
+            {
+                float new_hold = PathMain_SelectHoldYaw(imu.yaw_deg);
+                if (PathMain_Absf(PathMain_WrapDeg(new_hold -
+                                                   path_hold_yaw_deg)) > 0.5f)
+                {
+                    path_hold_yaw_deg = new_hold;
+                }
+                PathMain_HoldSelectedYaw();
+                (void)Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS,
+                                              0, 0, 0,
+                                              PATH_COMMAND_TIMEOUT_MS);
+            }
+        }
+        if ((uint32_t)(now_ms - path_finished_ms) >=
+            PATH_AUTO_RESTART_DELAY_MS)
+        {
+            path_auto_waiting = false;
+            PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
+            (void)PathMain_Start(now_ms);
+        }
+        if ((path_pa0_initialized == false))
+        {
+            path_pa0_previous = pa0;
+            path_pa0_initialized = true;
+        }
+        else if ((pa0 != 0U) && (path_pa0_previous == 0U))
+        {
+            path_auto_waiting = false;
+            PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
+        }
+        path_pa0_previous = pa0;
+        if (path_state != PATH_STATE_RUNNING)
+        {
+            return;
+        }
+    }
+    /* 上电5s自动起跑（仅IDLE且未跑过时） */
+    if ((path_state == PATH_STATE_IDLE) &&
+        ((uint32_t)(now_ms - path_init_ms) >= PATH_AUTO_START_DELAY_MS))
+    {
+        if (path_auto_start_count == 0U)
+        {
+            (void)PathMain_Start(now_ms);
+        }
+    }
+#endif
 
     if (remote_online == 0U)
     {
-        path_pa4_initialized = false;
-        path_pa4_previous = 0U;
+        path_pa0_initialized = false;
+        path_pa0_previous = 0U;
         if (path_state == PATH_STATE_RUNNING)
         {
             PathMain_LeaveAutomatic(PATH_STATE_FAULT,
@@ -600,12 +684,12 @@ void PathMain_Run(uint8_t remote_buttons, uint8_t remote_online)
         return;
     }
 
-    if (!path_pa4_initialized)
+    if (!path_pa0_initialized)
     {
-        path_pa4_previous = pa4;
-        path_pa4_initialized = true;
+        path_pa0_previous = pa0;
+        path_pa0_initialized = true;
     }
-    else if ((pa4 != 0U) && (path_pa4_previous == 0U))
+    else if ((pa0 != 0U) && (path_pa0_previous == 0U))
     {
         if (path_state == PATH_STATE_RUNNING)
         {
@@ -613,10 +697,13 @@ void PathMain_Run(uint8_t remote_buttons, uint8_t remote_online)
         }
         else
         {
+#if PATH_AUTO_RUN_ENABLE
+            path_auto_waiting = false;
+#endif
             (void)PathMain_Start(now_ms);
         }
     }
-    path_pa4_previous = pa4;
+    path_pa0_previous = pa0;
 
     if (path_state != PATH_STATE_RUNNING)
     {
