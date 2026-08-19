@@ -37,6 +37,8 @@
 #define PATH_PID_DT_S                0.01f
 #define PATH_ALIGN_DONE_DEG          2.0f
 #define PATH_ALIGN_TIMEOUT_MS        4000U
+#define PATH_WP_ALIGN_DONE_DEG       3.0f
+#define PATH_WP_ALIGN_TIMEOUT_MS     700U
 
 typedef struct
 {
@@ -498,22 +500,26 @@ static void PathMain_RunAlign(uint32_t now_ms)
     }
 
     error_deg = PathMain_WrapDeg(imu.yaw_deg - path_hold_yaw_deg);
-    if ((PathMain_Absf(error_deg) <= PATH_ALIGN_DONE_DEG) ||
-        ((uint32_t)(now_ms - path_align_start_ms) >= PATH_ALIGN_TIMEOUT_MS))
     {
-        path_yaw_aligning = false;
-        path_segment_change_ms = now_ms;
-        PathMain_ResetPid();
-        /* 拐点yaw纠正完成，再切到下一段 */
-        if (path_wp_yaw_pending)
+        float done_deg = path_wp_yaw_pending ? PATH_WP_ALIGN_DONE_DEG : PATH_ALIGN_DONE_DEG;
+        uint32_t timeout = path_wp_yaw_pending ? PATH_WP_ALIGN_TIMEOUT_MS : PATH_ALIGN_TIMEOUT_MS;
+        if ((PathMain_Absf(error_deg) <= done_deg) ||
+            ((uint32_t)(now_ms - path_align_start_ms) >= timeout))
         {
-            path_wp_yaw_pending = false;
-            path_segment_index = path_wp_next_seg;
-            PathMain_ResetArc();
-            if (path_segment_index >= PATH_SEGMENT_COUNT)
+            path_yaw_aligning = false;
+            path_segment_change_ms = now_ms;
+            PathMain_ResetPid();
+            /* 拐点yaw纠正完成，再切到下一段 */
+            if (path_wp_yaw_pending)
             {
-                PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
-                                        PATH_ERROR_NONE);
+                path_wp_yaw_pending = false;
+                path_segment_index = path_wp_next_seg;
+                PathMain_ResetArc();
+                if (path_segment_index >= PATH_SEGMENT_COUNT)
+                {
+                    PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
+                                            PATH_ERROR_NONE);
+                }
             }
         }
     }
@@ -561,7 +567,7 @@ static void PathMain_RunControl(uint32_t now_ms)
             {
                 path_wp_next_seg = path_segment_index + 1U;
             }
-            /* 若已在2°内则不额外对准，直接切段 */
+            /* 若已在3°内则不额外对准，直接切段 */
             {
                 imu_data_t imu2;
                 float err = 180.0f;
@@ -569,7 +575,7 @@ static void PathMain_RunControl(uint32_t now_ms)
                 {
                     err = PathMain_Absf(PathMain_WrapDeg(imu2.yaw_deg - path_hold_yaw_deg));
                 }
-                if (err <= PATH_ALIGN_DONE_DEG)
+                if (err <= PATH_WP_ALIGN_DONE_DEG)
                 {
                     path_segment_index = path_wp_next_seg;
                     PathMain_ResetArc();
