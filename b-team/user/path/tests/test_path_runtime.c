@@ -76,9 +76,15 @@ static void test_wait_for_dt35(void)
 
     Path_Run1ms(5000U);
     assert(Path_GetDiagnostics(&diagnostics));
-    assert(diagnostics.auto_state == PATH_AUTO_STATE_READY_WAIT);
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_WAIT);
     assert(mock_chassis_vy == 0);
     assert(!diagnostics.map_mirrored);
+
+    Path_AutoStartTrigger();
+    Path_Run1ms(5001U);
+    assert(Path_GetDiagnostics(&diagnostics));
+    assert(diagnostics.auto_state == PATH_AUTO_STATE_READY_WAIT);
+    assert(mock_chassis_vy == 0);
 }
 
 static void test_normal_dt35_route(void)
@@ -90,6 +96,7 @@ static void test_normal_dt35_route(void)
     Path_Init();
     reset_mocks();
     set_both(140U, 10U);
+    Path_AutoStartTrigger();
     Path_Run1ms(5000U);
     assert(Path_GetDiagnostics(&diagnostics));
     assert(diagnostics.auto_state == PATH_AUTO_STATE_DRIVE);
