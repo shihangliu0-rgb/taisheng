@@ -65,6 +65,8 @@ static bool path_arc_latched;
 static bool path_arc_opened;
 static bool path_arc_cleared;
 static uint16_t path_arc_front_open_cm;
+static bool path_wp_yaw_pending;
+static uint8_t path_wp_next_seg;
 
 volatile path_state_t path_state = PATH_STATE_IDLE;
 volatile path_error_t path_error = PATH_ERROR_NONE;
@@ -96,6 +98,7 @@ static void PathMain_LeaveAutomatic(path_state_t state,
                                     path_error_t error)
 {
     path_yaw_aligning = false;
+    path_wp_yaw_pending = false;
     PathMain_ResetArc();
     Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
     Chassis_SetControlMode(CHASSIS_CONTROL_MANUAL);
@@ -463,6 +466,7 @@ static bool PathMain_Start(uint32_t now_ms)
     path_auto_start_count++;
     path_yaw_aligning = (path_auto_start_count > 1U);
     path_align_start_ms = now_ms;
+    path_wp_yaw_pending = false;
     PathMain_ResetArc();
 
     AutoChassis_Stop();
@@ -500,6 +504,18 @@ static void PathMain_RunAlign(uint32_t now_ms)
         path_yaw_aligning = false;
         path_segment_change_ms = now_ms;
         PathMain_ResetPid();
+        /* 拐点yaw纠正完成，再切到下一段 */
+        if (path_wp_yaw_pending)
+        {
+            path_wp_yaw_pending = false;
+            path_segment_index = path_wp_next_seg;
+            PathMain_ResetArc();
+            if (path_segment_index >= PATH_SEGMENT_COUNT)
+            {
+                PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
+                                        PATH_ERROR_NONE);
+            }
+        }
     }
 }
 
@@ -528,22 +544,50 @@ static void PathMain_RunControl(uint32_t now_ms)
     if (PathMain_SegmentArrived(&front, &left))
     {
         Chassis_ReleaseVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS);
-        if ((path_segment_index == 1U) && PathMain_ArcActive())
+        /* 每到拐点先检查一边并原地yaw纠正，再进下一段 */
+        if (!path_wp_yaw_pending && !path_yaw_aligning)
         {
-            /* 弧线已含回横移，整段自动结束。 */
-            path_segment_index = PATH_SEGMENT_COUNT;
-        }
-        else
-        {
-            path_segment_index++;
-        }
-        PathMain_ResetArc();
-        path_segment_change_ms = now_ms;
-        PathMain_ResetPid();
-        if (path_segment_index >= PATH_SEGMENT_COUNT)
-        {
-            PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
-                                    PATH_ERROR_NONE);
+            imu_data_t imu;
+            if (ImuMain_GetData(&imu))
+            {
+                path_hold_yaw_deg = PathMain_SelectHoldYaw(imu.yaw_deg);
+                (void)ImuMain_SetTargetYaw(path_hold_yaw_deg);
+            }
+            if ((path_segment_index == 1U) && PathMain_ArcActive())
+            {
+                path_wp_next_seg = PATH_SEGMENT_COUNT;
+            }
+            else
+            {
+                path_wp_next_seg = path_segment_index + 1U;
+            }
+            /* 若已在2°内则不额外对准，直接切段 */
+            {
+                imu_data_t imu2;
+                float err = 180.0f;
+                if (ImuMain_GetData(&imu2))
+                {
+                    err = PathMain_Absf(PathMain_WrapDeg(imu2.yaw_deg - path_hold_yaw_deg));
+                }
+                if (err <= PATH_ALIGN_DONE_DEG)
+                {
+                    path_segment_index = path_wp_next_seg;
+                    PathMain_ResetArc();
+                    path_segment_change_ms = now_ms;
+                    PathMain_ResetPid();
+                    if (path_segment_index >= PATH_SEGMENT_COUNT)
+                    {
+                        PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
+                                                PATH_ERROR_NONE);
+                    }
+                    return;
+                }
+            }
+            path_wp_yaw_pending = true;
+            path_yaw_aligning = true;
+            path_align_start_ms = now_ms;
+            /* 下一周期进 RunAlign 原地纠正 */
+            return;
         }
         return;
     }
@@ -577,6 +621,8 @@ void PathMain_Init(void)
     path_yaw_aligning = false;
     path_hold_yaw_deg = 0.0f;
     path_align_start_ms = path_last_control_ms;
+    path_wp_yaw_pending = false;
+    path_wp_next_seg = 0U;
     PathMain_ResetArc();
     PathMain_ResetPid();
     PathMain_SetState(PATH_STATE_IDLE, PATH_ERROR_NONE);
