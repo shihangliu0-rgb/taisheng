@@ -64,7 +64,6 @@ static float path_pid_i_limit;
 
 static void Path_LoadFieldConfig(bool mirrored)
 {
-    PathMap_SetMirrored(mirrored);
     path_diagnostics.map_mirrored = mirrored;
 
     if (mirrored)
@@ -316,7 +315,7 @@ static void Path_AdvanceSegment(uint32_t now_ms)
     {
         path_diagnostics.active_axis =
             ((path_diagnostics.segment_index % 2U) == 0U) ?
-            PATH_MAP_AXIS_Y : PATH_MAP_AXIS_X;
+            PATH_AXIS_Y : PATH_AXIS_X;
     }
 }
 
@@ -590,7 +589,7 @@ void Path_Init(void)
     Path_PidReset();
     path_diagnostics.initialized = true;
     path_diagnostics.segment_count = PATH_DT35_SEGMENT_COUNT;
-    path_diagnostics.active_axis = PATH_MAP_AXIS_Y;
+    path_diagnostics.active_axis = PATH_AXIS_Y;
     path_diagnostics.auto_state = PATH_AUTO_STATE_WAIT;
 }
 

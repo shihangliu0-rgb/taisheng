@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H723xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../user/Action_api;../user/chassis_vesc;../user/com_link;../user/motor;../user/path/imu;../user/path;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
+              <IncludePath>../Core/Inc;../user/Action_api;../user/chassis_vesc;../user/com_link;../user/motor;../user/path;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1569,21 +1569,6 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Application/User/path/imu</GroupName>
-          <Files>
-            <File>
-              <FileName>path_line_imu.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path/imu/path_line_imu.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_line_imu.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/path/imu/path_line_imu.h</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
           <GroupName>Application/User/path</GroupName>
           <Files>
             <File>
@@ -1595,36 +1580,6 @@
               <FileName>path.h</FileName>
               <FileType>5</FileType>
               <FilePath>../user/path/path.h</FilePath>
-            </File>
-            <File>
-              <FileName>path_map.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path/path_map.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_map.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/path/path_map.h</FilePath>
-            </File>
-            <File>
-              <FileName>path_localization.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path/path_localization.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_localization.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/path/path_localization.h</FilePath>
-            </File>
-            <File>
-              <FileName>path_safety.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../user/path/path_safety.c</FilePath>
-            </File>
-            <File>
-              <FileName>path_safety.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../user/path/path_safety.h</FilePath>
             </File>
           </Files>
         </Group>

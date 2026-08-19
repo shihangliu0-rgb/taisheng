@@ -1,8 +1,6 @@
 #ifndef PATH_H
 #define PATH_H
 
-#include "path_map.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -69,6 +67,9 @@ extern "C" {
 #define PATH_AUTO_STATE_DONE          4U
 #define PATH_AUTO_STATE_OFF           5U
 
+#define PATH_AXIS_X                   0U
+#define PATH_AXIS_Y                   1U
+
 typedef struct
 {
     bool initialized;
@@ -86,7 +87,7 @@ typedef struct
     bool yaw_zero_lock_ready;
     bool map_mirrored;
     uint8_t auto_state;
-    path_map_axis_t active_axis;
+    uint8_t active_axis;
     uint8_t segment_index;
     uint8_t segment_count;
     uint8_t front_initial_sample_count;

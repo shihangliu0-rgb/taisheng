@@ -31,7 +31,6 @@
 #include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
-#include "path_line_imu.h"
 #include "path.h"
 #include "lora_link.h"
 #include "mcu_link.h"
@@ -221,7 +220,6 @@ __weak void StartChassisTask(void *argument)
   (void)argument;
   imu_result = ImuMain_Init();
   chassis_result = Chassis_Init();
-  PathLineImu_Init();
 
   /* Infinite loop */
   for(;;)
@@ -233,11 +231,6 @@ __weak void StartChassisTask(void *argument)
     if (chassis_result == HAL_OK)
     {
       Chassis_Run1ms();
-    }
-    /* 到点交接后融合里程计不再需要，停止其 1 ms 解算。 */
-    if (!Path_OdometryReleased())
-    {
-      PathLineImu_Run1ms(HAL_GetTick());
     }
     Path_Run1ms(HAL_GetTick());
 

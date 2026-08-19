@@ -1,5 +1,4 @@
 #include "imu.h"
-#include "path_line_imu.h"
 
 #include <math.h>
 #include <stddef.h>
