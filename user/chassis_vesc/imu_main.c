@@ -719,8 +719,11 @@ int16_t ImuMain_CalcOmega(int16_t vx, int16_t vy, int16_t omega)
     active_pid = &yaw_control.pid[stopped ? IMU_YAW_PID_STOP :
                                               IMU_YAW_PID_MOVE];
 
-    imu_data.yaw_error_deg = normalize_angle(imu_data.target_yaw_deg -
-                                             imu_data.yaw_deg);
+    /* 车体逆时针旋转时内部 yaw 为负，而底盘 z 正方向为逆时针。
+     * 使用“当前角 - 目标角”，再归一化到 [-180, 180)，可同时把
+     * +180/-180 当作同一航向，并始终选择不超过 180 度的短路径。 */
+    imu_data.yaw_error_deg = normalize_angle(imu_data.yaw_deg -
+                                             imu_data.target_yaw_deg);
     imu_data.yaw_hold_active = true;
     if (fabsf(imu_data.yaw_error_deg) <= imu_config.yaw_deadzone_deg)
     {
@@ -729,7 +732,8 @@ int16_t ImuMain_CalcOmega(int16_t vx, int16_t vy, int16_t omega)
         return 0;
     }
 
-    output = calculate_yaw_pid(active_pid, imu_data.yaw_error_deg) -
+    /* gyro 与内部 yaw 同号、与底盘 z 方向相反，因此同号项用于阻尼。 */
+    output = calculate_yaw_pid(active_pid, imu_data.yaw_error_deg) +
              filtered_gyro_deg_s * imu_config.yaw_gyro_k;
     output = limit_float(output, -active_pid->out_max,
                          active_pid->out_max);

@@ -255,12 +255,18 @@ static void PathMain_ArcCommand(const path_dt35_t *front,
         path_arc_latched = true;
     }
 
-    /* 前激光看开，说明不再正对中间挡板。 */
-    if (front->distance_cm > PATH_FRONT_ARRIVE_CM)
+    /* 横移达到进弧点后才识别开口，避免段切换处的测距噪声误触发。
+     * 开口期间持续跟踪前激光峰值，防止首个偏小读数锁死 clear。 */
+    if (path_arc_latched &&
+        (front->distance_cm > PATH_FRONT_ARRIVE_CM))
     {
         if (!path_arc_opened)
         {
             path_arc_opened = true;
+            path_arc_front_open_cm = front->distance_cm;
+        }
+        else if (front->distance_cm > path_arc_front_open_cm)
+        {
             path_arc_front_open_cm = front->distance_cm;
         }
         if (!path_arc_cleared &&
