@@ -5,36 +5,40 @@
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
 
+/* 调度与通信。 */
 #define PATH_CONTROL_PERIOD_MS       10U
 #define PATH_COMMAND_TIMEOUT_MS      50U
 #define PATH_DT35_TIMEOUT_MS         500U
-#define PATH_SEGMENT_SETTLE_MS       65U
-
+#define PATH_SEGMENT_SETTLE_MS       50U
 #define PATH_REMOTE_PA0_MASK         (1U << 0U)
 #define PATH_FRONT_SENSOR_INDEX      SENSOR_LINK_L_B_INDEX
 #define PATH_LEFT_SENSOR_INDEX       SENSOR_LINK_F_INDEX
-#define PATH_LASER_STOP_CM           10U
-#define PATH_FRONT_ARRIVE_CM         68U
-#define PATH_LEFT_NEAR_CM            69U
+
+/* 场地距离，单位 cm。 */
+#define PATH_LASER_STOP_CM           15U
+#define PATH_FRONT_ARRIVE_CM         70U
+#define PATH_LEFT_NEAR_CM            75U
 #define PATH_LEFT_FAR_CM             200U
 #define PATH_MIRROR_LEFT_CM          100U
-/* 1 开弧：段 1 绕中间挡板画弧，串完通道 2 和回横移；0 与原来完全一样。 */
-#define PATH_ARC_ENABLE              1
-/* 左移提前进弧，须大于 NEAR；等于 NEAR 则无弧。 */
-#define PATH_LEFT_NEAR_ARC_CM        110U
-/* 右移提前进弧，须小于 FAR；等于 FAR 则无弧。 */
-#define PATH_LEFT_FAR_ARC_CM         160U
-/* 前激光比开口时少这么多，才算越过中间挡板，允许 vx 反向。 */
-#define PATH_ARC_CLEAR_CM            60U
 
+/* 画弧：横移到触发线后进通道，前激光明显看开后再计算弧线进度。 */
+#define PATH_ARC_ENABLE              1
+#define PATH_LEFT_NEAR_ARC_CM        80U
+#define PATH_LEFT_FAR_ARC_CM         160U
+#define PATH_ARC_OPEN_CM             (PATH_FRONT_ARRIVE_CM + 20U)
+#define PATH_ARC_FRONT_DROP_MAX_CM   15U
+
+/* 平移控制。PID 周期直接由控制周期换算，不再单独维护参数。 */
 #define PATH_SEGMENT_COUNT           4U
-#define PATH_SPEED_MAX               170.0f
-#define PATH_SPEED_MIN               45.0f
-#define PATH_PID_KP                  2.6f
+#define PATH_SPEED_MAX               190.0f
+#define PATH_SPEED_MIN               50.0f
+#define PATH_PID_KP                  2.9f
 #define PATH_PID_KI                  1.2f
 #define PATH_PID_KD                  0.05f
 #define PATH_PID_I_LIMIT             30.0f
-#define PATH_PID_DT_S                0.01f
+#define PATH_PID_DT_S                ((float)PATH_CONTROL_PERIOD_MS / 1000.0f)
+
+/* 航向对准。 */
 #define PATH_ALIGN_DONE_DEG          2.0f
 #define PATH_ALIGN_TIMEOUT_MS        4000U
 #define PATH_WP_ALIGN_DONE_DEG       3.0f
@@ -54,19 +58,30 @@ typedef struct
     bool started;
 } path_pid_t;
 
+typedef enum
+{
+    PATH_ARC_SHIFT_TO_OPENING,
+    PATH_ARC_ENTER_CHANNEL,
+    PATH_ARC_RETURN_TO_LANE
+} path_arc_phase_t;
+
+typedef struct
+{
+    path_arc_phase_t phase;
+    uint16_t front_peak_cm;
+    uint16_t front_last_cm;
+} path_arc_t;
+
 static uint8_t path_pa0_previous;
 static bool path_pa0_initialized;
 static uint32_t path_last_control_ms;
 static uint32_t path_segment_change_ms;
 static path_pid_t path_pid;
+static path_arc_t path_arc;
 static uint8_t path_auto_start_count;
 static bool path_yaw_aligning;
 static float path_hold_yaw_deg;
 static uint32_t path_align_start_ms;
-static bool path_arc_latched;
-static bool path_arc_opened;
-static bool path_arc_cleared;
-static uint16_t path_arc_front_open_cm;
 static bool path_wp_yaw_pending;
 static uint8_t path_wp_next_seg;
 
@@ -90,10 +105,9 @@ static void PathMain_ResetPid(void)
 
 static void PathMain_ResetArc(void)
 {
-    path_arc_latched = false;
-    path_arc_opened = false;
-    path_arc_cleared = false;
-    path_arc_front_open_cm = 0U;
+    path_arc.phase = PATH_ARC_SHIFT_TO_OPENING;
+    path_arc.front_peak_cm = 0U;
+    path_arc.front_last_cm = 0U;
 }
 
 static void PathMain_LeaveAutomatic(path_state_t state,
@@ -106,6 +120,18 @@ static void PathMain_LeaveAutomatic(path_state_t state,
     Chassis_SetControlMode(CHASSIS_CONTROL_MANUAL);
     (void)ImuMain_CaptureCurrentYaw();
     PathMain_SetState(state, error);
+}
+
+static void PathMain_Finish(void)
+{
+    path_yaw_aligning = false;
+    path_wp_yaw_pending = false;
+    PathMain_ResetArc();
+    /* 终点不走200 ms停车斜坡，最迟1 ms内整组轮速清零。
+     * 保持自动模式，防止遥控摇杆偏置在下一帧立即接管。 */
+    Chassis_StopAll();
+    (void)ImuMain_CaptureCurrentYaw();
+    PathMain_SetState(PATH_STATE_FINISHED, PATH_ERROR_NONE);
 }
 
 static float PathMain_Absf(float value)
@@ -247,61 +273,82 @@ static void PathMain_ArcCommand(const path_dt35_t *front,
                        (float)PATH_LEFT_FAR_CM : (float)PATH_LEFT_NEAR_CM;
     float desired_left = left_first;
     float front_err = front_cm - (float)PATH_FRONT_ARRIVE_CM;
-    float span;
-    float alpha = 0.0f;
+    float total_span;
+    float clear_span;
+    float return_span;
+    float travelled;
+    float alpha;
 
-    if (PathMain_ArcTrigger(left))
+    *vx = 0;
+    *vy = 0;
+
+    /* 10 ms 内不可能真实缩短 15 cm。突降按遮挡处理：暂停且不推进弧线。 */
+    if ((path_arc.front_last_cm != 0U) &&
+        (path_arc.front_last_cm > front->distance_cm) &&
+        ((uint16_t)(path_arc.front_last_cm - front->distance_cm) >
+         PATH_ARC_FRONT_DROP_MAX_CM))
     {
-        path_arc_latched = true;
+        return;
+    }
+    path_arc.front_last_cm = front->distance_cm;
+
+    if ((path_arc.phase == PATH_ARC_SHIFT_TO_OPENING) &&
+        PathMain_ArcTrigger(left))
+    {
+        path_arc.phase = PATH_ARC_ENTER_CHANNEL;
     }
 
-    /* 横移达到进弧点后才识别开口，避免段切换处的测距噪声误触发。
-     * 开口期间持续跟踪前激光峰值，防止首个偏小读数锁死 clear。 */
-    if (path_arc_latched &&
-        (front->distance_cm > PATH_FRONT_ARRIVE_CM))
+    if (path_arc.phase == PATH_ARC_SHIFT_TO_OPENING)
     {
-        if (!path_arc_opened)
-        {
-            path_arc_opened = true;
-            path_arc_front_open_cm = front->distance_cm;
-        }
-        else if (front->distance_cm > path_arc_front_open_cm)
-        {
-            path_arc_front_open_cm = front->distance_cm;
-        }
-        if (!path_arc_cleared &&
-            (path_arc_front_open_cm > front->distance_cm) &&
-            ((uint16_t)(path_arc_front_open_cm - front->distance_cm) >=
-             PATH_ARC_CLEAR_CM))
-        {
-            path_arc_cleared = true;
-        }
+        *vx = PathMain_ArcAxis(left_first - left_cm);
+        return;
     }
 
-    if (path_arc_opened && path_arc_cleared)
+    /* 开口只接受明显高于终点的读数，随后持续跟踪峰值。 */
+    if (front->distance_cm >= PATH_ARC_OPEN_CM)
     {
-        span = (float)path_arc_front_open_cm -
-               (float)PATH_FRONT_ARRIVE_CM;
-        if (span < 1.0f)
+        if (front->distance_cm > path_arc.front_peak_cm)
         {
-            span = 1.0f;
+            path_arc.front_peak_cm = front->distance_cm;
         }
-        alpha = 1.0f - (front_err / span);
-        if (alpha < 0.0f)
+    }
+    if (path_arc.front_peak_cm == 0U)
+    {
+        *vx = PathMain_ArcAxis(left_first - left_cm);
+        return;
+    }
+
+    total_span = (float)path_arc.front_peak_cm -
+                 (float)PATH_FRONT_ARRIVE_CM;
+    travelled = (float)path_arc.front_peak_cm - front_cm;
+    if (travelled < 0.0f)
+    {
+        travelled = 0.0f;
+    }
+
+    /* 前1/3只进通道，后2/3平滑回到最终车道；不再依赖固定clear距离。 */
+    clear_span = total_span / 3.0f;
+    if ((path_arc.phase == PATH_ARC_ENTER_CHANNEL) &&
+        (front->distance_cm > PATH_FRONT_ARRIVE_CM) &&
+        (travelled >= clear_span))
+    {
+        path_arc.phase = PATH_ARC_RETURN_TO_LANE;
+    }
+
+    if (path_arc.phase == PATH_ARC_RETURN_TO_LANE)
+    {
+        return_span = total_span - clear_span;
+        if (return_span < 1.0f)
         {
-            alpha = 0.0f;
+            return_span = 1.0f;
         }
-        if (alpha > 1.0f)
-        {
-            alpha = 1.0f;
-        }
+        alpha = PathMain_Clamp((travelled - clear_span) / return_span,
+                               0.0f, 1.0f);
         desired_left = left_first * (1.0f - alpha) + left_final * alpha;
     }
 
     *vx = PathMain_ArcAxis(desired_left - left_cm);
-    *vy = 0;
-    /* 没越过挡板前只许往开口里走，vx 保持第一段方向，不能反向切挡板。 */
-    if (path_arc_latched && path_arc_opened && (front_err > 0.0f))
+    if (front_err > 0.0f)
     {
         *vy = (int16_t)(PathMain_Clamp(PATH_PID_KP * front_err,
                                        0.0f, PATH_SPEED_MAX) + 0.5f);
@@ -354,11 +401,11 @@ static bool PathMain_SegmentArrived(const path_dt35_t *front,
                           (left->distance_cm >= PATH_LEFT_FAR_CM) :
                           (left->distance_cm <= PATH_LEFT_NEAR_CM);
 
-        /* 画弧把回横移也做完，须实际进弧、越过挡板并到达最终车道。 */
+        /* 回到最终车道并到达通道终点，画弧路径才算完成。 */
         if (PathMain_ArcActive())
         {
-            return path_arc_latched && path_arc_opened &&
-                   path_arc_cleared && final_done &&
+            return (path_arc.phase == PATH_ARC_RETURN_TO_LANE) &&
+                   final_done &&
                    (front->distance_cm <= PATH_FRONT_ARRIVE_CM);
         }
         return first_done;
@@ -525,8 +572,7 @@ static void PathMain_RunAlign(uint32_t now_ms)
                 PathMain_ResetArc();
                 if (path_segment_index >= PATH_SEGMENT_COUNT)
                 {
-                    PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
-                                            PATH_ERROR_NONE);
+                    PathMain_Finish();
                 }
             }
         }
@@ -575,6 +621,12 @@ static void PathMain_RunControl(uint32_t now_ms)
             {
                 path_wp_next_seg = path_segment_index + 1U;
             }
+            if (path_wp_next_seg >= PATH_SEGMENT_COUNT)
+            {
+                path_segment_index = PATH_SEGMENT_COUNT;
+                PathMain_Finish();
+                return;
+            }
             /* 若已在3°内则不额外对准，直接切段 */
             {
                 imu_data_t imu2;
@@ -591,8 +643,7 @@ static void PathMain_RunControl(uint32_t now_ms)
                     PathMain_ResetPid();
                     if (path_segment_index >= PATH_SEGMENT_COUNT)
                     {
-                        PathMain_LeaveAutomatic(PATH_STATE_FINISHED,
-                                                PATH_ERROR_NONE);
+                        PathMain_Finish();
                     }
                     return;
                 }

@@ -419,6 +419,8 @@ void Chassis_SetControlMode(chassis_control_mode_t mode)
     {
         chassis_commands[CHASSIS_CMD_SOURCE_COMPUTER].active = false;
         chassis_commands[CHASSIS_CMD_SOURCE_LORA].active = false;
+        /* 进入自动模式是一次明确的重新启动，允许终点急停后的航向对准。 */
+        chassis_emergency_stop = false;
     }
     if (primask == 0U)
     {
