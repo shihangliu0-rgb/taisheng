@@ -733,7 +733,9 @@ int16_t ImuMain_CalcOmega(int16_t vx, int16_t vy, int16_t omega)
              filtered_gyro_deg_s * imu_config.yaw_gyro_k;
     output = limit_float(output, -active_pid->out_max,
                          active_pid->out_max);
-    imu_data.omega_output = (int16_t)output;
+    /* 对称四舍五入，避免小角度修正量被直接截断为 0。 */
+    imu_data.omega_output = (int16_t)(output +
+        ((output >= 0.0f) ? 0.5f : -0.5f));
     return imu_data.omega_output;
 }
 
@@ -785,6 +787,11 @@ HAL_StatusTypeDef ImuMain_SetTargetYaw(float target_yaw_deg)
 void ImuMain_EnableYawHold(bool enabled)
 {
     if (!initialized)
+    {
+        return;
+    }
+
+    if (imu_data.yaw_hold_enabled == enabled)
     {
         return;
     }

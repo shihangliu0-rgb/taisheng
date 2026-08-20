@@ -226,7 +226,7 @@ static int16_t PathMain_ArcAxis(float error_cm)
 {
     float output;
 
-    if (PathMain_Absf(error_cm) <= 1.0f)
+    if (PathMain_Absf(error_cm) < 1.0f)
     {
         return 0;
     }
@@ -348,10 +348,11 @@ static bool PathMain_SegmentArrived(const path_dt35_t *front,
                           (left->distance_cm >= PATH_LEFT_FAR_CM) :
                           (left->distance_cm <= PATH_LEFT_NEAR_CM);
 
-        /* 画弧把回横移也做完，要最终车道和通道尽头一起到。 */
+        /* 画弧把回横移也做完，须实际进弧、越过挡板并到达最终车道。 */
         if (PathMain_ArcActive())
         {
-            return final_done &&
+            return path_arc_latched && path_arc_opened &&
+                   path_arc_cleared && final_done &&
                    (front->distance_cm <= PATH_FRONT_ARRIVE_CM);
         }
         return first_done;
@@ -452,6 +453,8 @@ static bool PathMain_Start(uint32_t now_ms)
     }
 
     path_hold_yaw_deg = PathMain_SelectHoldYaw(imu.yaw_deg);
+    /* 先使能再设置目标，避免使能动作清掉本次选择的 0/180 航向。 */
+    ImuMain_EnableYawHold(true);
     if (ImuMain_SetTargetYaw(path_hold_yaw_deg) != HAL_OK)
     {
         PathMain_SetState(PATH_STATE_FAULT, PATH_ERROR_IMU);
@@ -472,7 +475,6 @@ static bool PathMain_Start(uint32_t now_ms)
     PathMain_ResetArc();
 
     AutoChassis_Stop();
-    ImuMain_EnableYawHold(true);
     Chassis_SetControlMode(CHASSIS_CONTROL_AUTONOMOUS);
     PathMain_SetState(PATH_STATE_RUNNING, PATH_ERROR_NONE);
     return true;
