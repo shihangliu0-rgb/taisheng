@@ -4,6 +4,7 @@
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
+#include "laser_safety.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -250,9 +251,9 @@ void ComputerLink_Run(void)
 
     if (has_command)
     {
-        (void)Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_COMPUTER,
-                                      cmd.vx, cmd.vy, cmd.z,
-                                      COMPUTER_LINK_TIMEOUT_MS);
+        (void)LaserSafety_RequestVelocity(CHASSIS_CMD_SOURCE_COMPUTER,
+                                          cmd.vx, cmd.vy, cmd.z,
+                                          COMPUTER_LINK_TIMEOUT_MS);
     }
     if (has_action)
     {

@@ -4,6 +4,7 @@
 #include "chassis_main.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
+#include "laser_safety.h"
 
 /* 调度与通信。 */
 #define PATH_CONTROL_PERIOD_MS       10U
@@ -665,9 +666,9 @@ static void PathMain_RunControl(uint32_t now_ms)
 
     PathMain_GetSegmentCommand(&front, &left, &vx, &vy);
     /* z=0，始终走底盘 ImuMain_CalcOmega，把航向保持在 0/180。 */
-    if (Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS,
-                                vx, vy, 0,
-                                PATH_COMMAND_TIMEOUT_MS) != HAL_OK)
+    if (LaserSafety_RequestVelocity(CHASSIS_CMD_SOURCE_AUTONOMOUS,
+                                    vx, vy, 0,
+                                    PATH_COMMAND_TIMEOUT_MS) != HAL_OK)
     {
         PathMain_LeaveAutomatic(PATH_STATE_FAULT,
                                 PATH_ERROR_CHASSIS);

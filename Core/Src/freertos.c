@@ -32,6 +32,7 @@
 #include "computer_link.h"
 #include "dt35_pnp_link.h"
 #include "imu_main.h"
+#include "laser_safety.h"
 #include "lora_link.h"
 #include "mcu_link.h"
 #include "path_main.h"
@@ -232,6 +233,7 @@ __weak void StartChassisTask(void *argument)
     if (chassis_result == HAL_OK)
     {
       Chassis_Run1ms();
+      LaserSafety_Run1ms();
     }
 
     next_tick += 1U;

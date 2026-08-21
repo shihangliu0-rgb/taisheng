@@ -341,7 +341,7 @@
               <MiscControls></MiscControls>
               <Define>USE_PWR_LDO_SUPPLY,USE_HAL_DRIVER,STM32H723xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../user/Action_api;../user/chassis_vesc;../user/com_link;../user/motor;../user/path;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
+              <IncludePath>../Core/Inc;../user/Action_api;../user/chassis_vesc;../user/com_link;../user/laser_safety;../user/motor;../user/path;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/RTOS2/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1486,6 +1486,22 @@
               <FileName>vesc_motor.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\user\chassis_vesc\vesc_motor.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+
+        <Group>
+          <GroupName>LASER_SAFETY</GroupName>
+          <Files>
+            <File>
+              <FileName>laser_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\user\laser_safety\laser_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>laser_safety.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\user\laser_safety\laser_safety.h</FilePath>
             </File>
           </Files>
         </Group>

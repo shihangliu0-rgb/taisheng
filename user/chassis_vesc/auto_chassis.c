@@ -1,6 +1,7 @@
 #include "auto_chassis.h"
 
 #include "chassis_main.h"
+#include "laser_safety.h"
 #include "sc_link.h"
 
 #include <math.h>
@@ -110,7 +111,7 @@ static HAL_StatusTypeDef AutoChassis_Request(float right_cmd,
 {
     HAL_StatusTypeDef result;
 
-    result = Chassis_RequestVelocity(
+    result = LaserSafety_RequestVelocity(
         CHASSIS_CMD_SOURCE_AUTONOMOUS,
         AutoChassis_ToCommand(right_cmd),
         AutoChassis_ToCommand(forward_cmd),

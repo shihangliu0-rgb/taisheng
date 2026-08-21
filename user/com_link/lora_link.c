@@ -1,5 +1,6 @@
 #include "lora_link.h"
 #include "chassis_main.h"
+#include "laser_safety.h"
 #include "mcu_link.h"
 
 #include <math.h>
@@ -138,8 +139,8 @@ static void LoraLink_HandleLocalPayload(const uint8_t *payload)
 
     if (Chassis_GetControlMode() == CHASSIS_CONTROL_MANUAL)
     {
-        (void)Chassis_RequestVelocity(CHASSIS_CMD_SOURCE_LORA,
-                                      vx, vy, z, REMOTE_TIMEOUT_MS);
+        (void)LaserSafety_RequestVelocity(CHASSIS_CMD_SOURCE_LORA,
+                                          vx, vy, z, REMOTE_TIMEOUT_MS);
     }
     else
     {
